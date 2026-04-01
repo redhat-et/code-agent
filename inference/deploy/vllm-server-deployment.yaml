@@ -1,0 +1,129 @@
+# vLLM model server deployment
+#
+# Serves an OpenAI-compatible API at http://vllm-server:8000/v1
+# NOTE: The service is named vllm-server (not vllm) to avoid
+# colliding with vLLM's VLLM_PORT env var via K8s service discovery.
+#
+# Prerequisites (only if using a gated model):
+#   oc create secret generic hf-token \
+#     --from-literal=token=hf_...
+#
+# Verify the server is ready:
+#   oc port-forward svc/vllm-server 8000:8000
+#   curl http://localhost:8000/v1/models
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  labels:
+    app: vllm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm
+  template:
+    metadata:
+      labels:
+        app: vllm
+    spec:
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          env:
+            # ── Model parameters (edit these) ──────────────────
+            - name: MODEL
+              value: "<HUGGINGFACE MODEL NAME>"
+            # Point all caches at the writable PVC mount
+            - name: HF_HOME
+              value: "/cache/huggingface"
+            - name: XDG_CACHE_HOME
+              value: "/cache"
+            - name: HOME
+              value: "/cache"
+            # HuggingFace token only needed for gated models.
+            # Uncomment for gated model
+            # - name: HF_TOKEN
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: hf-token
+            #       key: token
+          command: ["python3", "-m", "vllm.entrypoints.openai.api_server"]
+          args:
+            - "--model=$(MODEL)"
+            - "--tensor-parallel-size=1"
+            - "--max-model-len=68992"
+            - "--host=0.0.0.0"
+            - "--port=8000"
+            - "--gpu-memory-utilization=0.95" 
+            - "--enable-auto-tool-choice"
+            - "--tool-call-parser=<SET TO MODEL SPECIFIC TOOL PARSER>"
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 5
+          resources:
+            requests:
+              cpu: "4"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: "32Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: cache
+              mountPath: /cache
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        # Model weights cache — persisted so restarts don't re-download
+        - name: cache
+          persistentVolumeClaim:
+            claimName: vllm-cache
+        # vLLM needs large shared memory for NCCL / tensor parallel
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: "8Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-server
+  labels:
+    app: vllm
+spec:
+  selector:
+    app: vllm
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vllm-cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
