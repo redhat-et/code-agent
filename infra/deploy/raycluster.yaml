@@ -1,0 +1,117 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kube-rbac-proxy-config-rl-training-cluster
+data:
+  config-file.yaml: |+
+    authorization:
+      resourceAttributes:
+        apiVersion: v1
+        resource: services
+        subresource: proxy
+        name: rl-training-cluster
+---
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: rl-training-cluster
+spec:
+  rayVersion: "2.53.0"
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: "0.0.0.0"
+      num-cpus: "0"  # prevent training workloads from landing on head
+    template:
+      spec:
+        containers:
+          - name: ray-head
+            image: quay.io/michaelclifford/ray-openrlhf:latest
+            imagePullPolicy: Always
+            ports:
+              - containerPort: 6379
+                name: gcs
+              - containerPort: 8265
+                name: dashboard
+              - containerPort: 10001
+                name: client
+            resources:
+              requests:
+                cpu: "4"
+                memory: "8Gi"
+              limits:
+                cpu: "4"
+                memory: "8Gi"
+            env:
+              - name: NVIDIA_VISIBLE_DEVICES
+                value: "void"  # head does not need GPU access
+            volumeMounts:
+              - name: ray-tmp
+                mountPath: /tmp
+        volumes:
+          - name: ray-tmp
+            emptyDir: {}
+  workerGroupSpecs:
+    # vLLM rollout engine -- inference only
+    - groupName: rollout
+      replicas: 1
+      minReplicas: 1
+      maxReplicas: 1
+      rayStartParams:
+        num-gpus: "1"
+      template:
+        spec:
+          containers:
+            - name: ray-worker
+              image: quay.io/michaelclifford/ray-openrlhf:latest
+              imagePullPolicy: Always
+              resources:
+                requests:
+                  cpu: "4"
+                  memory: "16Gi"
+                  nvidia.com/gpu: "1"
+                limits:
+                  cpu: "4"
+                  memory: "16Gi"
+                  nvidia.com/gpu: "1"
+              volumeMounts:
+                - name: ray-tmp
+                  mountPath: /tmp
+          volumes:
+            - name: ray-tmp
+              emptyDir: {}
+    # Actor + reference model training via DeepSpeed
+    - groupName: training
+      replicas: 1
+      minReplicas: 1
+      maxReplicas: 1
+      rayStartParams:
+        num-gpus: "2"
+      template:
+        spec:
+          containers:
+            - name: ray-worker
+              image: quay.io/michaelclifford/ray-openrlhf:latest
+              imagePullPolicy: Always
+              resources:
+                requests:
+                  cpu: "8"
+                  memory: "64Gi"
+                  nvidia.com/gpu: "2"
+                limits:
+                  cpu: "8"
+                  memory: "64Gi"
+                  nvidia.com/gpu: "2"
+              volumeMounts:
+                - name: ray-tmp
+                  mountPath: /tmp
+                - name: shm
+                  mountPath: /dev/shm
+          volumes:
+            - name: ray-tmp
+              emptyDir: {}
+            # NCCL needs large shared memory for DeepSpeed allreduce
+            - name: shm
+              emptyDir:
+                medium: Memory
+                sizeLimit: "4Gi"

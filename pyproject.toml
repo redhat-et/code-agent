@@ -1,0 +1,13 @@
+[project]
+name = "code-agent"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "ray[default]>=2.48.0",
+]
+
+[project.optional-dependencies]
+training = [
+    "ray[default]>=2.48.0",
+    "openrlhf[vllm]",
+]

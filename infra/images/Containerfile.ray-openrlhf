@@ -1,0 +1,21 @@
+FROM quay.io/modh/ray:2.53.0-py312-cu128
+
+USER 0
+
+ENV FLASH_ATTN_WHL="flash_attn-2.8.3+cu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl"
+
+# 1. Download the pre-built flash-attn wheel (matched to torch 2.9 + cxx11abi)
+# 2. Install it first so pip sees flash-attn==2.8.3 as satisfied
+# 3. Install openrlhf[vllm] which pulls torch 2.9 and skips flash-attn
+# 4. Reinstall the wheel to overwrite if torch upgrade broke the .so linkage
+RUN curl -L -o /tmp/${FLASH_ATTN_WHL} "https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/${FLASH_ATTN_WHL}" && \
+    echo "4e2f9e39313266b1544b68138b15b91ee6221eccf14f7902b7c6620351340810  /tmp/${FLASH_ATTN_WHL}" | sha256sum -c - && \
+    pip install --no-cache-dir /tmp/${FLASH_ATTN_WHL} && \
+    pip install --no-cache-dir "openrlhf[vllm]" && \
+    pip install --no-cache-dir --force-reinstall --no-deps /tmp/${FLASH_ATTN_WHL} && \
+    rm /tmp/${FLASH_ATTN_WHL}
+
+USER 1001
+
+ENV HF_HOME=/tmp/.cache/huggingface
+ENV XDG_CACHE_HOME=/tmp/.cache
