@@ -1,0 +1,83 @@
+---
+# One-time Job to build the SWE-bench prompted dataset.
+#
+# Clones repos, reads source files, constructs prompts using swebench's
+# pipeline, and uploads the result to S3/MinIO. Only needs to run once
+# per dataset/prompt-style/file-source combination.
+#
+# Prerequisites:
+#   - MinIO deployed: oc apply -f infra/deploy/minio.yaml
+#   - swe-bench bucket created in MinIO
+#
+# Usage:
+#   oc apply -f evals/swe_bench/deploy/job-build-prompts.yaml
+#
+# Monitor:
+#   oc logs -f job/build-swe-bench-prompts
+#
+# Cleanup:
+#   oc delete job build-swe-bench-prompts
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: build-swe-bench-prompts
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: build-prompts
+          image: quay.io/michaelclifford/ray-swe-bench:latest
+          imagePullPolicy: Always
+          command:
+            - python3
+            - -m
+            - evals.swe_bench.build_prompt_dataset
+            - --dataset
+            - SWE-bench/SWE-bench_Verified
+            - --output
+            - /tmp/prompted_dataset.jsonl
+            - --prompt-style
+            - style-3
+            - --file-source
+            - oracle
+            - --s3-output
+            - s3://swe-bench/swe-bench-verified/prompts/style-3-oracle.jsonl
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: MINIO_ROOT_USER
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: MINIO_ROOT_PASSWORD
+            - name: S3_ENDPOINT_URL
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: MINIO_ENDPOINT_URL
+            - name: HOME
+              value: /tmp
+            - name: HF_HOME
+              value: /tmp/.cache/huggingface
+            - name: XDG_CACHE_HOME
+              value: /tmp/.cache
+          resources:
+            requests:
+              cpu: "4"
+              memory: "8Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"
+          volumeMounts:
+            - name: workspace
+              mountPath: /tmp
+      volumes:
+        - name: workspace
+          emptyDir:
+            sizeLimit: 20Gi

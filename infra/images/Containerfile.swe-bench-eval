@@ -1,0 +1,45 @@
+# Ray worker image for SWE-bench evaluation orchestration.
+#
+# This image runs the Ray head and workers that:
+#   - Phase 1 head: Builds prompts using swebench's pipeline (clones repos)
+#   - Phase 1 workers: Call vLLM to generate patches, run AST verification
+#   - Phase 2 workers: Create K8s Jobs for test execution, collect results
+#
+# Actual test execution happens in the pre-built SWE-bench container
+# images (from DockerHub) running as native K8s Jobs.
+#
+# Build:
+#   podman build -f infra/images/Containerfile.swe-bench-eval \
+#       -t quay.io/michaelclifford/ray-swe-bench:latest .
+#
+# Push:
+#   podman push quay.io/michaelclifford/ray-swe-bench:latest
+
+FROM quay.io/modh/ray:2.53.0-py312-cu128
+
+USER 0
+
+# git is needed for swebench's prompt pipeline (clones repos to read source files)
+RUN dnf install -y git && dnf clean all
+
+# SWE-bench harness (for TestSpec generation, prompt construction, and grading)
+RUN pip install --no-cache-dir \
+    "swebench @ git+https://github.com/SWE-bench/SWE-bench.git@v4.1.0" \
+    "kubernetes>=28.0.0" \
+    "openai>=1.0.0" \
+    "datasets" \
+    "boto3" \
+    "tiktoken" \
+    "unidiff" \
+    "transformers"
+
+# Install the code-agent evals package
+COPY pyproject.toml /app/pyproject.toml
+COPY evals/ /app/evals/
+RUN pip install --no-cache-dir /app
+
+USER 1001
+
+ENV HOME=/tmp
+ENV HF_HOME=/tmp/.cache/huggingface
+ENV XDG_CACHE_HOME=/tmp/.cache
