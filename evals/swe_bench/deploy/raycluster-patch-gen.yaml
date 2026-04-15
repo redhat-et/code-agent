@@ -1,0 +1,114 @@
+---
+# ConfigMap required by the ODH KubeRay operator's kube-rbac-proxy sidecar.
+# See agent-notes/odh-kuberay-rbac-proxy-configmap-bug.md
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kube-rbac-proxy-config-swe-bench-patch-gen
+data:
+  config-file.yaml: |+
+    authorization:
+      resourceAttributes:
+        apiVersion: v1
+        resource: services
+        subresource: proxy
+        name: swe-bench-patch-gen
+---
+# Phase 1 RayCluster: Patch generation via vLLM.
+#
+# Workers are lightweight -- they just make HTTP calls to vLLM.
+# vLLM is the bottleneck with a single endpoint, so few workers
+# are needed. Scale workers up when adding more vLLM instances.
+#
+# Prerequisites:
+#   - Prompted dataset built: oc apply -f evals/swe_bench/deploy/job-build-prompts.yaml
+#   - vLLM server deployed (inference/deploy/vllm-server-deployment.yaml)
+#   - MinIO credentials secret:
+#       oc create secret generic minio-credentials \
+#         --from-literal=MINIO_ROOT_USER=... \
+#         --from-literal=MINIO_ROOT_PASSWORD=... \
+#         --from-literal=MINIO_ENDPOINT_URL=...
+#   - Port-forward: oc port-forward svc/swe-bench-patch-gen-head-svc 8265:8265
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: swe-bench-patch-gen
+spec:
+  rayVersion: "2.53.0"
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: "0.0.0.0"
+      num-cpus: "0"  # prevent workloads from landing on head
+    template:
+      spec:
+        serviceAccountName: swe-bench-eval
+        containers:
+          - name: ray-head
+            image: quay.io/michaelclifford/ray-swe-bench:latest
+            imagePullPolicy: Always
+            ports:
+              - containerPort: 6379
+                name: gcs
+              - containerPort: 8265
+                name: dashboard
+              - containerPort: 10001
+                name: client
+            resources:
+              requests:
+                cpu: "4"
+                memory: "8Gi"
+              limits:
+                cpu: "4"
+                memory: "8Gi"
+            env:
+              - name: NVIDIA_VISIBLE_DEVICES
+                value: "void"
+              # MinIO/S3 credentials for persisting predictions
+              - name: AWS_ACCESS_KEY_ID
+                valueFrom:
+                  secretKeyRef:
+                    name: minio-credentials
+                    key: MINIO_ROOT_USER
+              - name: AWS_SECRET_ACCESS_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: minio-credentials
+                    key: MINIO_ROOT_PASSWORD
+              - name: S3_ENDPOINT_URL
+                valueFrom:
+                  secretKeyRef:
+                    name: minio-credentials
+                    key: MINIO_ENDPOINT_URL
+            volumeMounts:
+              - name: ray-tmp
+                mountPath: /tmp
+        volumes:
+          - name: ray-tmp
+            emptyDir: {}
+  workerGroupSpecs:
+    - groupName: patch-gen
+      replicas: 2
+      minReplicas: 1
+      maxReplicas: 8  # scale up when adding more vLLM endpoints
+      rayStartParams:
+        num-cpus: "2"
+      template:
+        spec:
+          serviceAccountName: swe-bench-eval
+          containers:
+            - name: ray-worker
+              image: quay.io/michaelclifford/ray-swe-bench:latest
+              imagePullPolicy: Always
+              resources:
+                requests:
+                  cpu: "2"
+                  memory: "4Gi"
+                limits:
+                  cpu: "2"
+                  memory: "4Gi"
+              volumeMounts:
+                - name: ray-tmp
+                  mountPath: /tmp
+          volumes:
+            - name: ray-tmp
+              emptyDir: {}
