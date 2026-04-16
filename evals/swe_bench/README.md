@@ -106,7 +106,7 @@ If gold patches resolve, the harness is working. If they don't, there's a setup 
 
 ## Architecture
 
-```
+```markdown
 Step 0: Build Prompts (one-time K8s Job)
   clone repos -> read source files -> build style-3 prompts -> upload to S3
 

@@ -104,7 +104,7 @@ def grade_instance(
         return InstanceResult(
             instance_id=instance_id,
             resolved=False,
-            patch_exists=prediction.get("model_patch") is not None,
+            patch_exists=bool(prediction.get("model_patch")),
             patch_successfully_applied=False,
             error=str(e),
         )
@@ -127,9 +127,12 @@ def aggregate_reports(results: list[InstanceResult]) -> AggregateReport:
     for result in results:
         if result.error is not None:
             report.error_instances += 1
+            report.unresolved_instances += 1
             report.error_ids.append(result.instance_id)
+            report.unresolved_ids.append(result.instance_id)
         elif not result.patch_exists:
             report.empty_patch_instances += 1
+            report.unresolved_instances += 1
             report.unresolved_ids.append(result.instance_id)
         elif result.resolved:
             report.resolved_instances += 1

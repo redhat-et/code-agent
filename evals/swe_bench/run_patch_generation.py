@@ -171,9 +171,18 @@ def main():
         if batch
     ]
 
-    # Collect results
+    # Collect results -- process futures one at a time so a single
+    # worker failure doesn't discard results from other workers
     all_results = []
-    for batch_results in ray.get(futures):
+    pending_futures = list(futures)
+    while pending_futures:
+        ready, pending_futures = ray.wait(pending_futures, num_returns=1)
+        try:
+            batch_results = ray.get(ready[0])
+        except Exception as e:
+            logger.error(f"Patch worker batch failed: {e}")
+            continue
+
         for result in batch_results:
             save_prediction(output_dir, result)
             all_results.append(result)

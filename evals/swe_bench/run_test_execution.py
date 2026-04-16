@@ -115,8 +115,6 @@ def main():
                         help="Per-instance timeout in seconds")
     parser.add_argument("--swebench-namespace", type=str, default="swebench",
                         help="DockerHub namespace for pre-built images")
-    parser.add_argument("--skip-verifier-failures", action="store_true",
-                        help="Skip instances that failed AST verification in Phase 1")
     parser.add_argument("--instance-limit", type=int, default=0,
                         help="Max instances to evaluate (0 = no limit)")
     parser.add_argument("--s3-output", type=str, default=None,
@@ -151,28 +149,6 @@ def main():
     if not is_gold and args.instance_limit > 0:
         predictions = predictions[:args.instance_limit]
         logger.info(f"Limited to {len(predictions)} instances")
-
-    # Optionally filter out AST failures (not applicable in gold mode)
-    if not is_gold and args.skip_verifier_failures:
-        original_count = len(predictions)
-        filtered = []
-        for pred in predictions:
-            pred_detail_path = output_dir / pred["instance_id"] / "prediction.json"
-            if pred_detail_path.exists():
-                try:
-                    detail = json.loads(pred_detail_path.read_text())
-                    verifier_results = detail.get("verifier_results", [])
-                    if any(v["status"] == "fail" for v in verifier_results):
-                        logger.info(f"Skipping {pred['instance_id']} (AST failure)")
-                        continue
-                except (json.JSONDecodeError, KeyError, OSError):
-                    pass
-            filtered.append(pred)
-        predictions = filtered
-        logger.info(
-            f"Filtered {original_count - len(predictions)} AST failures, "
-            f"{len(predictions)} remaining"
-        )
 
     if not predictions:
         logger.info("No predictions to evaluate")
@@ -221,19 +197,30 @@ def main():
         for i, pred in enumerate(pending):
             batches[i % num_workers].append(pred)
 
-        # Submit work
+        # Submit work -- instances dict is shared via Ray object store
+        # (serialized once, not per-worker)
+        instances_ref = ray.put(instances_by_id)
         logger.info(
             f"Distributing {len(pending)} instances across {num_workers} workers "
             f"({args.max_concurrent_jobs} concurrent jobs per worker)"
         )
         futures = [
-            worker.evaluate_batch.remote(batch, instances_by_id, args.run_id)
+            worker.evaluate_batch.remote(batch, instances_ref, args.run_id)
             for worker, batch in zip(workers, batches)
             if batch
         ]
 
-        # Collect results and persist each immediately on the head
-        for batch_results in ray.get(futures):
+        # Collect results -- process futures one at a time so a single
+        # worker failure doesn't discard results from other workers
+        pending_futures = list(futures)
+        while pending_futures:
+            ready, pending_futures = ray.wait(pending_futures, num_returns=1)
+            try:
+                batch_results = ray.get(ready[0])
+            except Exception as e:
+                logger.error(f"Test worker batch failed: {e}")
+                continue
+
             for result in batch_results:
                 iid = result["instance_id"]
                 instance_dir = output_dir / iid

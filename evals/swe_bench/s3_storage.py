@@ -68,32 +68,3 @@ def download_file(s3_uri: str, local_path: str | Path) -> None:
     logger.info(f"Downloading s3://{bucket}/{key} to {local_path}")
     s3.download_file(bucket, key, str(local_path))
     logger.info(f"Download complete")
-
-
-def upload_directory(local_dir: str | Path, s3_uri_prefix: str) -> int:
-    """Upload all files in a directory to S3/MinIO.
-
-    Preserves directory structure under the S3 prefix.
-
-    Args:
-        local_dir: Local directory to upload.
-        s3_uri_prefix: S3 URI prefix (e.g. s3://bucket/run-001/).
-
-    Returns:
-        Number of files uploaded.
-    """
-    bucket, prefix = parse_s3_uri(s3_uri_prefix)
-    s3 = _get_s3_client()
-    local_dir = Path(local_dir)
-    count = 0
-
-    for filepath in local_dir.rglob("*"):
-        if filepath.is_file():
-            relative = filepath.relative_to(local_dir)
-            key = f"{prefix}{relative}" if prefix else str(relative)
-            logger.info(f"Uploading {filepath} to s3://{bucket}/{key}")
-            s3.upload_file(str(filepath), bucket, key)
-            count += 1
-
-    logger.info(f"Uploaded {count} files to s3://{bucket}/{prefix}")
-    return count

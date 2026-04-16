@@ -44,9 +44,10 @@ def _job_name(instance_id: str, run_id: str) -> str:
     """
     safe_id = instance_id.lower().replace("__", "-").replace("_", "-")
     uid = hashlib.md5(f"{instance_id}-{run_id}-{time.time()}".encode()).hexdigest()[:6]
-    name = f"swe-{safe_id}-{uid}"
-    # Truncate to 63 chars (K8s limit)
-    return name[:63]
+    # Truncate safe_id first to preserve the uid suffix (uniqueness)
+    max_base_len = 63 - len("swe--") - len(uid)
+    safe_id = safe_id[:max_base_len].strip("-")
+    return f"swe-{safe_id}-{uid}"
 
 
 def _build_job_manifest(

@@ -33,10 +33,12 @@ OUTPUT_DIR="${OUTPUT_DIR:-/tmp/swe-bench-results/${RUN_ID}}"
 S3_BUCKET="${S3_BUCKET:-swe-bench}"
 S3_OUTPUT="${S3_OUTPUT:-s3://${S3_BUCKET}/runs/${RUN_ID}/predictions.jsonl}"
 PROMPTS="${PROMPTS:-s3://${S3_BUCKET}/verified/prompts/style-3-oracle.jsonl}"
-MAX_TOKENS="${MAX_TOKENS:-4096}"
-TEMPERATURE="${TEMPERATURE:-0.0}"
+MAX_TOKENS="${MAX_TOKENS:-16000}"
+TEMPERATURE="${TEMPERATURE:-0.15}"
 
-set -x
+if [[ "${DEBUG:-0}" == "1" ]]; then
+  set -x
+fi
 
 ray job submit \
     --address="${RAY_ADDRESS}" \

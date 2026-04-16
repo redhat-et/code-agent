@@ -49,6 +49,8 @@ class PatchWorker:
         self.model_name = model_name
         self.max_tokens = max_tokens
         self.temperature = temperature
+        if not vllm_urls:
+            raise ValueError("vllm_urls must contain at least one endpoint")
         self.clients = [
             openai.OpenAI(base_url=url, api_key="not-needed")
             for url in vllm_urls

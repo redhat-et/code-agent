@@ -40,7 +40,9 @@ S3_BUCKET="${S3_BUCKET:-swe-bench}"
 PREDICTIONS="${PREDICTIONS:-s3://${S3_BUCKET}/runs/${RUN_ID}/predictions.jsonl}"
 S3_OUTPUT="${S3_OUTPUT:-s3://${S3_BUCKET}/runs/${RUN_ID}/results.json}"
 
-set -x
+if [[ "${DEBUG:-0}" == "1" ]]; then
+  set -x
+fi
 
 # Build command args
 CMD_ARGS=(

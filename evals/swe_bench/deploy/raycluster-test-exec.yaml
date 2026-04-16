@@ -41,10 +41,16 @@ spec:
     template:
       spec:
         serviceAccountName: swe-bench-eval
+        securityContext:
+          runAsNonRoot: true
         containers:
           - name: ray-head
             image: quay.io/michaelclifford/ray-swe-bench:latest
             imagePullPolicy: Always
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop: ["ALL"]
             ports:
               - containerPort: 6379
                 name: gcs
@@ -94,10 +100,16 @@ spec:
       template:
         spec:
           serviceAccountName: swe-bench-eval
+          securityContext:
+            runAsNonRoot: true
           containers:
             - name: ray-worker
               image: quay.io/michaelclifford/ray-swe-bench:latest
               imagePullPolicy: Always
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
               resources:
                 requests:
                   cpu: "2"

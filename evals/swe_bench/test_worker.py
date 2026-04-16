@@ -108,12 +108,17 @@ class TestWorker:
 
         if not job_result.test_output:
             logger.warning(f"No test output for {instance_id}")
+            error = (
+                "K8s Job timed out"
+                if job_result.timed_out
+                else "No test output captured from pod logs"
+            )
             return {
                 "instance_id": instance_id,
                 "resolved": False,
                 "patch_exists": bool(model_patch),
                 "patch_successfully_applied": False,
-                "error": "No test output captured from pod logs",
+                "error": error,
                 "tests_status": None,
             }
 
@@ -160,7 +165,7 @@ class TestWorker:
 
         # Run instances with a concurrency window
         with ThreadPoolExecutor(max_workers=self.max_concurrent_jobs) as pool:
-            future_to_id = {}
+            future_to_pred = {}
             for pred in predictions:
                 instance_id = pred["instance_id"]
                 instance_data = instances_by_id.get(instance_id)
@@ -183,10 +188,11 @@ class TestWorker:
                     instance_data,
                     run_id,
                 )
-                future_to_id[future] = instance_id
+                future_to_pred[future] = pred
 
-            for future in as_completed(future_to_id):
-                instance_id = future_to_id[future]
+            for future in as_completed(future_to_pred):
+                pred = future_to_pred[future]
+                instance_id = pred["instance_id"]
                 try:
                     result = future.result()
                 except Exception as e:
@@ -194,7 +200,7 @@ class TestWorker:
                     result = {
                         "instance_id": instance_id,
                         "resolved": False,
-                        "patch_exists": False,
+                        "patch_exists": bool(pred.get("model_patch")),
                         "patch_successfully_applied": False,
                         "error": str(e),
                         "tests_status": None,
