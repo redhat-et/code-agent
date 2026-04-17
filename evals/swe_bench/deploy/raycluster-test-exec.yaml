@@ -1,0 +1,125 @@
+---
+# ConfigMap required by the ODH KubeRay operator's kube-rbac-proxy sidecar.
+# See agent-notes/odh-kuberay-rbac-proxy-configmap-bug.md
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kube-rbac-proxy-config-swe-bench-test-exec
+data:
+  config-file.yaml: |+
+    authorization:
+      resourceAttributes:
+        apiVersion: v1
+        resource: services
+        subresource: proxy
+        name: swe-bench-test-exec
+---
+# Phase 2 RayCluster: Test execution via K8s Jobs.
+#
+# Workers are thin orchestrators -- they create K8s Jobs using pre-built
+# SWE-bench container images, watch for completion, and collect logs.
+# Each worker manages a concurrency window of M K8s Jobs in parallel.
+# The actual test execution happens in the K8s Job pods, not here.
+#
+# With 4 workers x 4 concurrent jobs = 16 parallel test executions.
+#
+# Prerequisites:
+#   - oc apply -f evals/swe_bench/deploy/rbac.yaml
+#   - predictions.jsonl from Phase 1 (in S3/MinIO)
+#   - MinIO credentials secret (same as Phase 1)
+#   - Port-forward: oc port-forward svc/swe-bench-test-exec-head-svc 8265:8265
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: swe-bench-test-exec
+spec:
+  rayVersion: "2.53.0"
+  headGroupSpec:
+    rayStartParams:
+      dashboard-host: "0.0.0.0"
+      num-cpus: "0"
+    template:
+      spec:
+        serviceAccountName: swe-bench-eval
+        securityContext:
+          runAsNonRoot: true
+        containers:
+          - name: ray-head
+            image: quay.io/michaelclifford/ray-swe-bench:latest
+            imagePullPolicy: Always
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop: ["ALL"]
+            ports:
+              - containerPort: 6379
+                name: gcs
+              - containerPort: 8265
+                name: dashboard
+              - containerPort: 10001
+                name: client
+            resources:
+              requests:
+                cpu: "4"
+                memory: "8Gi"
+              limits:
+                cpu: "4"
+                memory: "8Gi"
+            env:
+              - name: NVIDIA_VISIBLE_DEVICES
+                value: "void"
+              # MinIO/S3 credentials for reading predictions and writing results
+              - name: AWS_ACCESS_KEY_ID
+                valueFrom:
+                  secretKeyRef:
+                    name: minio-credentials
+                    key: MINIO_ROOT_USER
+              - name: AWS_SECRET_ACCESS_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: minio-credentials
+                    key: MINIO_ROOT_PASSWORD
+              - name: S3_ENDPOINT_URL
+                valueFrom:
+                  secretKeyRef:
+                    name: minio-credentials
+                    key: MINIO_ENDPOINT_URL
+            volumeMounts:
+              - name: ray-tmp
+                mountPath: /tmp
+        volumes:
+          - name: ray-tmp
+            emptyDir: {}
+  workerGroupSpecs:
+    - groupName: test-exec
+      replicas: 4
+      minReplicas: 1
+      maxReplicas: 8
+      rayStartParams:
+        num-cpus: "2"
+      template:
+        spec:
+          serviceAccountName: swe-bench-eval
+          securityContext:
+            runAsNonRoot: true
+          containers:
+            - name: ray-worker
+              image: quay.io/michaelclifford/ray-swe-bench:latest
+              imagePullPolicy: Always
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: "2"
+                  memory: "4Gi"
+                limits:
+                  cpu: "2"
+                  memory: "4Gi"
+              volumeMounts:
+                - name: ray-tmp
+                  mountPath: /tmp
+          volumes:
+            - name: ray-tmp
+              emptyDir: {}
