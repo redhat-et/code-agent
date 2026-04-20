@@ -1,0 +1,220 @@
+# Mirror SWE-bench container images from DockerHub to the OpenShift
+# internal registry.  Two-phase Job:
+#
+#   1. Init container (ray-swe-bench): generates deduplicated image list
+#      from the HuggingFace dataset using mirror_images.py.
+#   2. Main container (skopeo): copies each image from DockerHub to the
+#      internal registry.  Skips images that already exist in the
+#      destination.  Exits cleanly on the first rate-limit error (HTTP 429
+#      or "TOOMANYREQUESTS") so you can re-run the Job later to continue.
+#
+# The Job is idempotent: re-running it picks up where it left off because
+# already-mirrored images are skipped.  Just delete the old Job and
+# re-apply after the DockerHub rate-limit window resets (~6 hours).
+#
+#   oc delete job mirror-swebench-images -n code-agent
+#   oc apply  -f evals/swe_bench/deploy/job-mirror-images.yaml
+#
+# Prerequisites:
+#   1. Create a DockerHub pull secret:
+#        oc create secret docker-registry dockerhub-pull \
+#          --docker-server=docker.io \
+#          --docker-username=<user> \
+#          --docker-password=<token> \
+#          -n code-agent
+#
+#   2. Apply RBAC (creates the swe-bench-mirror SA with registry push access):
+#        oc apply -f evals/swe_bench/deploy/rbac.yaml
+#
+# Usage:
+#   oc apply -f evals/swe_bench/deploy/job-mirror-images.yaml
+#   oc logs -f job/mirror-swebench-images   # watch progress
+#
+# To mirror only a subset (e.g. 50 images), edit --limit below.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mirror-swebench-images
+  namespace: code-agent
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400   # 4 hours (generous for a single rate-limit window)
+  template:
+    spec:
+      serviceAccountName: swe-bench-mirror
+      restartPolicy: Never
+
+      volumes:
+        - name: shared
+          emptyDir: {}
+        - name: dockerhub-creds
+          secret:
+            secretName: dockerhub-pull
+
+      initContainers:
+        # Step 1: Generate the deduplicated image list
+        - name: generate-list
+          image: quay.io/michaelclifford/ray-swe-bench@sha256:d35839b2c3bf6ac0d1ae1d8cddf1ea134706b951ff5e5a87f527b760e2e3341e
+          command:
+            - python
+            - -m
+            - evals.swe_bench.mirror_images
+            - --dataset=princeton-nlp/SWE-bench_Verified
+            - --output=/shared/image-list.txt
+            # Set to 0 for all images, or a smaller number for testing
+            - --limit=0
+          env:
+            - name: HF_HOME
+              value: /tmp/.cache/huggingface
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+
+      containers:
+        # Step 2: Copy images using skopeo
+        - name: mirror
+          image: quay.io/skopeo/stable@sha256:768bd580febc6a18996dab3d6b1de5e290e99d22de8dbb07a8ffde53cd10de81
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+
+              DEST_REGISTRY="image-registry.openshift-image-registry.svc:5000"
+              DEST_NAMESPACE="code-agent"
+              IMAGE_LIST="/shared/image-list.txt"
+
+              if [ ! -f "$IMAGE_LIST" ]; then
+                echo "ERROR: Image list not found at $IMAGE_LIST"
+                exit 1
+              fi
+
+              TOTAL=$(wc -l < "$IMAGE_LIST" | tr -d ' ')
+              echo "Found $TOTAL images to process"
+
+              # Parse DockerHub credentials from the pull secret
+              DOCKER_AUTH_FILE="/tmp/auth.json"
+              if [ -f /dockerhub-creds/.dockerconfigjson ]; then
+                cp /dockerhub-creds/.dockerconfigjson "$DOCKER_AUTH_FILE"
+                echo "Using DockerHub credentials from pull secret"
+              else
+                echo "WARNING: No DockerHub credentials found, using anonymous pulls"
+                echo '{}' > "$DOCKER_AUTH_FILE"
+              fi
+
+              # Get the internal registry token from the SA
+              DEST_TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+
+              pull_count=0
+              skip_count=0
+              fail_count=0
+              line_num=0
+
+              while IFS= read -r image || [ -n "$image" ]; do
+                line_num=$((line_num + 1))
+                [ -z "$image" ] && continue
+
+                # Source: docker.io (image already includes namespace, e.g. swebench/sweb.eval...)
+                src="docker://docker.io/${image}"
+
+                # Destination: strip the DockerHub namespace, keep the image name
+                # swebench/sweb.eval.x86_64.foo:latest -> sweb.eval.x86_64.foo:latest
+                dest_image="${image#*/}"
+                dest="docker://${DEST_REGISTRY}/${DEST_NAMESPACE}/${dest_image}"
+
+                # Check if already mirrored (skip to save rate limit)
+                if skopeo inspect \
+                    --creds="unused:${DEST_TOKEN}" \
+                    --tls-verify=false \
+                    "docker://${DEST_REGISTRY}/${DEST_NAMESPACE}/${dest_image}" \
+                    >/dev/null 2>&1; then
+                  skip_count=$((skip_count + 1))
+                  echo "[${line_num}/${TOTAL}] SKIP (exists): ${dest_image}"
+                  continue
+                fi
+
+                echo "[${line_num}/${TOTAL}] PULL #$((pull_count + 1)): ${image} -> ${dest_image}"
+
+                # Capture stderr so we can detect rate limiting
+                err_file="/tmp/skopeo-err-$$"
+                if skopeo copy \
+                    --src-authfile="$DOCKER_AUTH_FILE" \
+                    --dest-creds="unused:${DEST_TOKEN}" \
+                    --dest-tls-verify=false \
+                    "$src" "$dest" 2>"$err_file"; then
+                  pull_count=$((pull_count + 1))
+                  rm -f "$err_file"
+                else
+                  err_msg=$(cat "$err_file" 2>/dev/null || true)
+                  rm -f "$err_file"
+
+                  # Check for DockerHub rate limiting (HTTP 429 / TOOMANYREQUESTS)
+                  if echo "$err_msg" | grep -qiE '429|toomanyrequests|rate limit'; then
+                    echo ""
+                    echo "=== DockerHub rate limit hit after ${pull_count} pulls ==="
+                    echo "=== ${skip_count} images were already mirrored (skipped) ==="
+                    echo "=== Re-run this Job after the rate-limit window resets (~6 hours) ==="
+                    echo ""
+                    echo "  oc delete job mirror-swebench-images -n code-agent"
+                    echo "  oc apply  -f evals/swe_bench/deploy/job-mirror-images.yaml"
+                    echo ""
+                    # Exit 0 -- this is expected, not an error.  The Job
+                    # is idempotent; next run skips already-mirrored images.
+                    exit 0
+                  fi
+
+                  # Some other error -- log and continue.  Transient failures
+                  # are handled by re-running the Job (idempotent).
+                  echo "WARN: Failed to copy ${image}: ${err_msg}"
+                  fail_count=$((fail_count + 1))
+                fi
+
+              done < "$IMAGE_LIST"
+
+              remaining=$((TOTAL - skip_count - pull_count - fail_count))
+              echo ""
+              echo "=== Mirror run complete ==="
+              echo "  Total:     ${TOTAL}"
+              echo "  Pulled:    ${pull_count}"
+              echo "  Skipped:   ${skip_count} (already in registry)"
+              echo "  Failed:    ${fail_count}"
+              echo "  Remaining: ${remaining}"
+
+              if [ $fail_count -gt 0 ]; then
+                echo "  WARNING: ${fail_count} images failed -- re-run to retry"
+              fi
+
+              if [ $remaining -eq 0 ] && [ $fail_count -eq 0 ]; then
+                echo "  All images mirrored successfully!"
+              fi
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+            - name: dockerhub-creds
+              mountPath: /dockerhub-creds
+              readOnly: true
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

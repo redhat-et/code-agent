@@ -37,6 +37,11 @@ class TestWorker:
         service_account: K8s ServiceAccount for Job pods.
         max_concurrent_jobs: Max K8s Jobs to run in parallel per worker.
         swebench_namespace: DockerHub namespace for pre-built images.
+        image_registry: If set, pull images from this registry instead of
+            DockerHub.  The swebench namespace prefix (e.g. "swebench/") is
+            replaced with "<registry>/<k8s_namespace>/".  For the OpenShift
+            internal registry this looks like:
+            image-registry.openshift-image-registry.svc:5000/code-agent
     """
 
     def __init__(
@@ -46,9 +51,11 @@ class TestWorker:
         service_account: str = "swe-bench-eval",
         max_concurrent_jobs: int = 4,
         swebench_namespace: str = "swebench",
+        image_registry: str | None = None,
     ):
         self.max_concurrent_jobs = max_concurrent_jobs
         self.swebench_namespace = swebench_namespace
+        self.image_registry = image_registry
 
         self.runner = InstanceRunner(
             k8s_namespace=k8s_namespace,
@@ -83,6 +90,14 @@ class TestWorker:
 
         image = test_spec.instance_image_key
         eval_script = test_spec.eval_script
+
+        # Rewrite image ref to point at the internal registry when configured.
+        # DockerHub image: swebench/sweb.eval.x86_64.django_1776_django-16938:latest
+        # Internal image:  <registry>/sweb.eval.x86_64.django_1776_django-16938:latest
+        if self.image_registry:
+            # Strip the DockerHub namespace prefix (e.g. "swebench/")
+            _, _, image_name = image.partition("/")
+            image = f"{self.image_registry}/{image_name}"
 
         logger.info(f"Evaluating {instance_id} with image {image}")
 

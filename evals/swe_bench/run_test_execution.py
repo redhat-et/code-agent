@@ -115,6 +115,10 @@ def main():
                         help="Per-instance timeout in seconds")
     parser.add_argument("--swebench-namespace", type=str, default="swebench",
                         help="DockerHub namespace for pre-built images")
+    parser.add_argument("--image-registry", type=str, default=None,
+                        help="Pull SWE-bench images from this registry instead of "
+                             "DockerHub (e.g. image-registry.openshift-image-registry"
+                             ".svc:5000/code-agent)")
     parser.add_argument("--instance-limit", type=int, default=0,
                         help="Max instances to evaluate (0 = no limit)")
     parser.add_argument("--s3-output", type=str, default=None,
@@ -188,6 +192,7 @@ def main():
                 service_account=args.service_account,
                 max_concurrent_jobs=args.max_concurrent_jobs,
                 swebench_namespace=args.swebench_namespace,
+                image_registry=args.image_registry,
             )
             for _ in range(num_workers)
         ]

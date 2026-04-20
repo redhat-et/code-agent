@@ -4,8 +4,8 @@
 #
 # Reads predictions from S3/MinIO (output of Phase 1), distributes test
 # execution across Ray workers. Each worker creates K8s Jobs using
-# pre-built SWE-bench container images from DockerHub. Results are
-# graded, aggregated, and uploaded to S3/MinIO.
+# pre-built SWE-bench container images. Results are graded, aggregated,
+# and uploaded to S3/MinIO.
 #
 # Prerequisites:
 #   - RayCluster deployed: oc apply -f evals/swe_bench/deploy/raycluster-test-exec.yaml
@@ -13,6 +13,8 @@
 #   - predictions.jsonl from Phase 1 (in S3)
 #   - MinIO credentials secret (same as Phase 1)
 #   - Port-forward active: oc port-forward svc/swe-bench-test-exec-head-svc 8265:8265
+#   - (optional) Images mirrored to internal registry:
+#       oc apply -f evals/swe_bench/deploy/job-mirror-images.yaml
 #
 # Usage:
 #   bash run_swe_bench_phase2.sh
@@ -22,6 +24,10 @@
 #
 # Verify harness with gold patches (skips Phase 1 entirely):
 #   PREDICTIONS=gold INSTANCE_LIMIT=16 RUN_ID=gold-test bash run_swe_bench_phase2.sh
+#
+# Use internal registry (after mirroring images):
+#   IMAGE_REGISTRY=image-registry.openshift-image-registry.svc:5000/code-agent \
+#     bash run_swe_bench_phase2.sh
 
 set -euo pipefail
 
@@ -36,6 +42,7 @@ K8S_NAMESPACE="${K8S_NAMESPACE:-}"
 SERVICE_ACCOUNT="${SERVICE_ACCOUNT:-swe-bench-eval}"
 TIMEOUT="${TIMEOUT:-1800}"
 INSTANCE_LIMIT="${INSTANCE_LIMIT:-0}"
+IMAGE_REGISTRY="${IMAGE_REGISTRY:-}"
 S3_BUCKET="${S3_BUCKET:-swe-bench}"
 PREDICTIONS="${PREDICTIONS:-s3://${S3_BUCKET}/runs/${RUN_ID}/predictions.jsonl}"
 S3_OUTPUT="${S3_OUTPUT:-s3://${S3_BUCKET}/runs/${RUN_ID}/results.json}"
@@ -62,6 +69,11 @@ CMD_ARGS=(
 # Only pass --k8s-namespace if explicitly set (otherwise auto-detected in-cluster)
 if [[ -n "${K8S_NAMESPACE}" ]]; then
     CMD_ARGS+=(--k8s-namespace "${K8S_NAMESPACE}")
+fi
+
+# Use internal registry instead of DockerHub when set
+if [[ -n "${IMAGE_REGISTRY}" ]]; then
+    CMD_ARGS+=(--image-registry "${IMAGE_REGISTRY}")
 fi
 
 ray job submit \

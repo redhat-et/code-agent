@@ -31,3 +31,42 @@ roleRef:
   kind: Role
   name: swe-bench-eval
   apiGroup: rbac.authorization.k8s.io
+
+---
+# Allow the swe-bench-eval SA to pull images from the internal registry
+# (needed by eval Jobs to pull the mirrored SWE-bench images).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: swe-bench-eval-image-puller
+subjects:
+  - kind: ServiceAccount
+    name: swe-bench-eval
+roleRef:
+  kind: ClusterRole
+  name: system:image-puller
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Dedicated SA for the mirror Job -- kept separate from swe-bench-eval
+# so that eval pods (which run untrusted patches) never have registry
+# write access.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: swe-bench-mirror
+
+---
+# Allow the mirror SA to create ImageStreams and push images to the
+# internal registry.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: swe-bench-mirror-image-builder
+subjects:
+  - kind: ServiceAccount
+    name: swe-bench-mirror
+roleRef:
+  kind: ClusterRole
+  name: system:image-builder
+  apiGroup: rbac.authorization.k8s.io
