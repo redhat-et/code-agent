@@ -93,10 +93,21 @@ class TestWorker:
 
         # Rewrite image ref to point at the internal registry when configured.
         # DockerHub image: swebench/sweb.eval.x86_64.django_1776_django-16938:latest
-        # Internal image:  <registry>/sweb.eval.x86_64.django_1776_django-16938:latest
+        # Internal image:  <registry>/sweb.eval.x86_64.django_1776_django-16938:v1
+        # The :latest -> :v1 retag is done during mirroring so that
+        # imagePullPolicy=IfNotPresent is respected by the kubelet
+        # (K8s forces Always for :latest tags).
         if self.image_registry:
             # Strip the DockerHub namespace prefix (e.g. "swebench/")
             _, _, image_name = image.partition("/")
+            # Retag :latest -> :v1 to match the mirrored tag
+            if not image_name.endswith(":latest"):
+                logger.warning(
+                    f"Expected :latest tag for {instance_id}, "
+                    f"got {image_name} -- using as-is"
+                )
+            else:
+                image_name = image_name.removesuffix(":latest") + ":v1"
             image = f"{self.image_registry}/{image_name}"
 
         logger.info(f"Evaluating {instance_id} with image {image}")

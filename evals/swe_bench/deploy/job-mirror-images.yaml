@@ -130,9 +130,17 @@ spec:
                 # Source: docker.io (image already includes namespace, e.g. swebench/sweb.eval...)
                 src="docker://docker.io/${image}"
 
-                # Destination: strip the DockerHub namespace, keep the image name
-                # swebench/sweb.eval.x86_64.foo:latest -> sweb.eval.x86_64.foo:latest
+                # Destination: strip the DockerHub namespace and retag from
+                # :latest to :v1 so that IfNotPresent is respected by the
+                # kubelet (K8s forces Always for :latest tags).
+                # swebench/sweb.eval.x86_64.foo:latest -> sweb.eval.x86_64.foo:v1
                 dest_image="${image#*/}"
+                if [[ "$dest_image" != *:latest ]]; then
+                  echo "WARN: unexpected tag on ${image} (expected :latest), skipping"
+                  fail_count=$((fail_count + 1))
+                  continue
+                fi
+                dest_image="${dest_image%:latest}:v1"
                 dest="docker://${DEST_REGISTRY}/${DEST_NAMESPACE}/${dest_image}"
 
                 # Check if already mirrored (skip to save rate limit)
