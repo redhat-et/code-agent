@@ -40,6 +40,7 @@ class InferenceWorker:
         max_tokens: int = 4096,
         temperature: float = 0.0,
         system_message: str | None = None,
+        timeout: float = 600.0,
     ):
         import openai
 
@@ -47,12 +48,13 @@ class InferenceWorker:
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.system_message = system_message
+        self.timeout = timeout
 
         if not vllm_urls:
             raise ValueError("vllm_urls must contain at least one endpoint")
 
         self.clients = [
-            openai.OpenAI(base_url=url, api_key="not-needed")
+            openai.OpenAI(base_url=url, api_key="not-needed", timeout=timeout)
             for url in vllm_urls
         ]
         self._call_count = 0
@@ -84,6 +86,7 @@ class InferenceWorker:
             messages=messages,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
+            timeout=self.timeout
         )
 
         return response.choices[0].message.content or ""
@@ -114,7 +117,7 @@ class InferenceWorker:
             instance_id = instance[instance_id_key]
             prompt = prompts.get(instance_id)
 
-            if not prompt:
+            if prompt is None:
                 logger.error(f"No prompt found for {instance_id}")
                 results.append({
                     "instance_id": instance_id,
