@@ -5,6 +5,8 @@ distributes test execution across Ray workers, each managing
 concurrent K8s Jobs using pre-built SWE-bench container images.
 Results are graded, aggregated, and uploaded to S3/MinIO.
 
+Results are optionally logged to MLflow when MLFLOW_TRACKING_URI is set.
+
 Usage:
     python run_test_execution.py \
         --predictions s3://swe-bench/runs/run-001/predictions.jsonl \
@@ -17,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 
 import ray
@@ -273,6 +276,46 @@ def main():
 
     if report.resolved_ids:
         logger.info(f"Resolved: {report.resolved_ids}")
+
+    # ── MLflow tracking (optional) ──────────────────────────────
+    # Logs params, metrics, and the results artifact to MLflow.
+    # Activated when MLFLOW_TRACKING_URI is set in the environment.
+    if os.environ.get("MLFLOW_TRACKING_URI"):
+        try:
+            import mlflow
+
+            # Ensure MLflow's artifact client talks to the in-cluster MinIO,
+            # not AWS. The S3_ENDPOINT_URL env var is set on the Ray head
+            # from the minio-credentials secret.
+            s3_endpoint = os.environ.get("S3_ENDPOINT_URL") or os.environ.get("MINIO_ENDPOINT_URL")
+            if s3_endpoint and not os.environ.get("MLFLOW_S3_ENDPOINT_URL"):
+                os.environ["MLFLOW_S3_ENDPOINT_URL"] = s3_endpoint
+
+            mlflow.set_experiment("swe-bench-eval")
+            with mlflow.start_run(run_name=f"{args.run_id}-phase2",
+                                  tags={"run_id": args.run_id, "phase": "2"}):
+                mlflow.log_params({
+                    "dataset": args.dataset,
+                    "split": args.split,
+                    "run_id": args.run_id,
+                    "predictions_source": args.predictions,
+                    "num_workers": args.num_workers,
+                    "max_concurrent_jobs": args.max_concurrent_jobs,
+                    "timeout": args.timeout,
+                    "instance_limit": args.instance_limit,
+                })
+                mlflow.log_metrics({
+                    "total_instances": report.total_instances,
+                    "resolved_instances": report.resolved_instances,
+                    "unresolved_instances": report.unresolved_instances,
+                    "error_instances": report.error_instances,
+                    "empty_patch_instances": report.empty_patch_instances,
+                    "resolve_rate": report.resolve_rate,
+                })
+                mlflow.log_artifact(str(results_path))
+                logger.info("Phase 2 results logged to MLflow")
+        except Exception as e:
+            logger.warning(f"MLflow logging failed (non-fatal): {e}")
 
     ray.shutdown()
 

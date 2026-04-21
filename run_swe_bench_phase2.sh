@@ -46,6 +46,10 @@ IMAGE_REGISTRY="${IMAGE_REGISTRY:-}"
 S3_BUCKET="${S3_BUCKET:-swe-bench}"
 PREDICTIONS="${PREDICTIONS:-s3://${S3_BUCKET}/runs/${RUN_ID}/predictions.jsonl}"
 S3_OUTPUT="${S3_OUTPUT:-s3://${S3_BUCKET}/runs/${RUN_ID}/results.json}"
+# MLflow tracking (optional). Set to the in-cluster MLflow service URL
+# to enable experiment tracking. Unset to disable.
+# e.g. MLFLOW_TRACKING_URI=http://mlflow-server:5000
+MLFLOW_TRACKING_URI="${MLFLOW_TRACKING_URI:-}"
 
 if [[ "${DEBUG:-0}" == "1" ]]; then
   set -x
@@ -76,6 +80,13 @@ if [[ -n "${IMAGE_REGISTRY}" ]]; then
     CMD_ARGS+=(--image-registry "${IMAGE_REGISTRY}")
 fi
 
+# Pass MLflow tracking URI via Ray runtime env so workers pick it up
+ENV_ARGS=()
+if [[ -n "${MLFLOW_TRACKING_URI}" ]]; then
+    ENV_ARGS+=(--runtime-env-json "{\"env_vars\": {\"MLFLOW_TRACKING_URI\": \"${MLFLOW_TRACKING_URI}\"}}")
+fi
+
 ray job submit \
     --address="${RAY_ADDRESS}" \
+    "${ENV_ARGS[@]}" \
     -- "${CMD_ARGS[@]}"

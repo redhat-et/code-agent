@@ -39,6 +39,9 @@ spec:
       dashboard-host: "0.0.0.0"
       num-cpus: "0"
     template:
+      metadata:
+        labels:
+          mlflow-client: "true"
       spec:
         serviceAccountName: swe-bench-eval
         securityContext:

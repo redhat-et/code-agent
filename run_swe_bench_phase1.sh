@@ -35,21 +35,38 @@ S3_OUTPUT="${S3_OUTPUT:-s3://${S3_BUCKET}/runs/${RUN_ID}/predictions.jsonl}"
 PROMPTS="${PROMPTS:-s3://${S3_BUCKET}/verified/prompts/style-3-oracle.jsonl}"
 MAX_TOKENS="${MAX_TOKENS:-16000}"
 TEMPERATURE="${TEMPERATURE:-0.15}"
+# MLflow tracking (optional). Set to the in-cluster MLflow service URL
+# to enable experiment tracking. Unset to disable.
+# e.g. MLFLOW_TRACKING_URI=http://mlflow-server:5000
+MLFLOW_TRACKING_URI="${MLFLOW_TRACKING_URI:-}"
 
 if [[ "${DEBUG:-0}" == "1" ]]; then
   set -x
 fi
 
+# Build command args
+CMD_ARGS=(
+    python3 -m evals.swe_bench.run_patch_generation
+    --vllm-url "${VLLM_URL}"
+    --model-name "${MODEL_NAME}"
+    --dataset "${DATASET}"
+    --prompts "${PROMPTS}"
+    --num-workers "${NUM_WORKERS}"
+    --output-dir "${OUTPUT_DIR}"
+    --instance-limit "${INSTANCE_LIMIT}"
+    --s3-output "${S3_OUTPUT}"
+    --max-tokens "${MAX_TOKENS}"
+    --temperature "${TEMPERATURE}"
+    --run-id "${RUN_ID}"
+)
+
+# Pass MLflow tracking URI via Ray runtime env so workers pick it up
+ENV_ARGS=()
+if [[ -n "${MLFLOW_TRACKING_URI}" ]]; then
+    ENV_ARGS+=(--runtime-env-json "{\"env_vars\": {\"MLFLOW_TRACKING_URI\": \"${MLFLOW_TRACKING_URI}\"}}")
+fi
+
 ray job submit \
     --address="${RAY_ADDRESS}" \
-    -- python3 -m evals.swe_bench.run_patch_generation \
-    --vllm-url "${VLLM_URL}" \
-    --model-name "${MODEL_NAME}" \
-    --dataset "${DATASET}" \
-    --prompts "${PROMPTS}" \
-    --num-workers "${NUM_WORKERS}" \
-    --output-dir "${OUTPUT_DIR}" \
-    --instance-limit "${INSTANCE_LIMIT}" \
-    --s3-output "${S3_OUTPUT}" \
-    --max-tokens "${MAX_TOKENS}" \
-    --temperature "${TEMPERATURE}"
+    "${ENV_ARGS[@]}" \
+    -- "${CMD_ARGS[@]}"

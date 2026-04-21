@@ -4,6 +4,8 @@ Loads pre-built prompts (from S3 or local file, created by
 build_prompt_dataset.py), distributes inference across Ray workers,
 and saves predictions.jsonl to S3/MinIO for Phase 2.
 
+Results are optionally logged to MLflow when MLFLOW_TRACKING_URI is set.
+
 Prerequisites:
     Run build_prompt_dataset.py first to create the prompted dataset.
 
@@ -14,6 +16,10 @@ Usage:
         --prompts s3://swe-bench/prompts/style-3-oracle.jsonl \
         --output-dir /tmp/swe-bench-results/ \
         --s3-output s3://swe-bench/runs/run-001/predictions.jsonl
+
+    # With MLflow tracking:
+    MLFLOW_TRACKING_URI=http://mlflow-server:5000 \
+    python run_patch_generation.py ... --run-id my-eval-run
 """
 
 from __future__ import annotations
@@ -21,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 
 import ray
@@ -100,6 +107,8 @@ def main():
                         help="Sampling temperature")
     parser.add_argument("--instance-limit", type=int, default=0,
                         help="Max instances to evaluate (0 = no limit)")
+    parser.add_argument("--run-id", type=str, default="eval-run",
+                        help="Unique run identifier (shared with Phase 2 for MLflow)")
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -196,10 +205,53 @@ def main():
     # Summary
     total = len(dataset)
     errors = sum(1 for r in all_results if r.get("error"))
+    # Count all patches present on disk (new + resumed) for accurate metrics.
+    patches_generated = sum(
+        1 for inst in dataset
+        if (output_dir / inst["instance_id"] / "prediction.json").exists()
+    )
     logger.info(
-        f"Phase 1 complete: {len(all_results)} patches generated, "
+        f"Phase 1 complete: {patches_generated} patches generated, "
         f"{errors} errors, {total} total instances in dataset"
     )
+
+    # ── MLflow tracking (optional) ──────────────────────────────
+    # Logs params, metrics, and the predictions artifact to MLflow.
+    # Activated when MLFLOW_TRACKING_URI is set in the environment.
+    # The run is tagged with the run_id so Phase 2 can resume it.
+    if os.environ.get("MLFLOW_TRACKING_URI"):
+        try:
+            import mlflow
+
+            # Ensure MLflow's artifact client talks to the in-cluster MinIO,
+            # not AWS. The S3_ENDPOINT_URL env var is set on the Ray head
+            # from the minio-credentials secret.
+            s3_endpoint = os.environ.get("S3_ENDPOINT_URL") or os.environ.get("MINIO_ENDPOINT_URL")
+            if s3_endpoint and not os.environ.get("MLFLOW_S3_ENDPOINT_URL"):
+                os.environ["MLFLOW_S3_ENDPOINT_URL"] = s3_endpoint
+
+            mlflow.set_experiment("swe-bench-eval")
+            with mlflow.start_run(run_name=f"{args.run_id}-phase1",
+                                  tags={"run_id": args.run_id, "phase": "1"}):
+                mlflow.log_params({
+                    "model_name": args.model_name,
+                    "dataset": args.dataset,
+                    "split": args.split,
+                    "run_id": args.run_id,
+                    "num_workers": args.num_workers,
+                    "max_tokens": args.max_tokens,
+                    "temperature": args.temperature,
+                    "instance_limit": args.instance_limit,
+                })
+                mlflow.log_metrics({
+                    "total_instances": total,
+                    "patches_generated": patches_generated,
+                    "generation_errors": errors,
+                })
+                mlflow.log_artifact(str(predictions_path))
+                logger.info("Phase 1 results logged to MLflow")
+        except Exception as e:
+            logger.warning(f"MLflow logging failed (non-fatal): {e}")
 
     ray.shutdown()
 

@@ -31,7 +31,8 @@ RUN pip install --no-cache-dir \
     "boto3" \
     "tiktoken" \
     "unidiff" \
-    "transformers"
+    "transformers" \
+    "mlflow>=2.21.0"
 
 # Install the code-agent evals package
 COPY pyproject.toml /app/pyproject.toml
