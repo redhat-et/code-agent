@@ -1,7 +1,7 @@
 """S3/MinIO storage helpers for persisting evaluation artifacts.
 
 Handles upload and download of predictions and results between
-Phase 1 and Phase 2. Credentials and endpoint are read from
+evaluation phases. Credentials and endpoint are read from
 environment variables:
 
     AWS_ACCESS_KEY_ID     (from K8s secret minio-credentials / MINIO_ROOT_USER)

@@ -16,6 +16,8 @@ from typing import Any
 from swebench.harness.grading import get_eval_report
 from swebench.harness.test_spec.test_spec import TestSpec
 
+from evals.common.grader import BaseAggregateReport
+
 
 @dataclass
 class InstanceResult:
@@ -30,20 +32,72 @@ class InstanceResult:
 
 
 @dataclass
-class AggregateReport:
-    """Aggregate report across all evaluated instances."""
+class AggregateReport(BaseAggregateReport):
+    """Aggregate report across all evaluated SWE-bench instances.
 
-    total_instances: int = 0
-    resolved_instances: int = 0
-    unresolved_instances: int = 0
-    error_instances: int = 0
-    empty_patch_instances: int = 0
-    resolve_rate: float = 0.0
-    resolved_ids: list[str] = field(default_factory=list)
-    unresolved_ids: list[str] = field(default_factory=list)
-    error_ids: list[str] = field(default_factory=list)
+    Inherits common aggregation structure from BaseAggregateReport.
+    Adds SWE-bench-specific field aliases for compatibility.
+    """
+
+    # Aliases for base class fields (for backward compatibility)
+    @property
+    def total_instances(self) -> int:
+        return self.total
+
+    @total_instances.setter
+    def total_instances(self, value: int) -> None:
+        self.total = value
+
+    @property
+    def resolved_instances(self) -> int:
+        return self.passed
+
+    @resolved_instances.setter
+    def resolved_instances(self, value: int) -> None:
+        self.passed = value
+
+    @property
+    def unresolved_instances(self) -> int:
+        return self.failed
+
+    @unresolved_instances.setter
+    def unresolved_instances(self, value: int) -> None:
+        self.failed = value
+
+    @property
+    def error_instances(self) -> int:
+        return self.errors
+
+    @error_instances.setter
+    def error_instances(self, value: int) -> None:
+        self.errors = value
+
+    @property
+    def empty_patch_instances(self) -> int:
+        return self.empty
+
+    @empty_patch_instances.setter
+    def empty_patch_instances(self, value: int) -> None:
+        self.empty = value
+
+    @property
+    def resolve_rate(self) -> float:
+        return self.pass_rate
+
+    @resolve_rate.setter
+    def resolve_rate(self, value: float) -> None:
+        self.pass_rate = value
+
+    @property
+    def resolved_ids(self) -> list[str]:
+        return self.passed_ids
+
+    @property
+    def unresolved_ids(self) -> list[str]:
+        return self.failed_ids
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert to dict with SWE-bench field names."""
         return {
             "total_instances": self.total_instances,
             "resolved_instances": self.resolved_instances,
@@ -122,26 +176,25 @@ def aggregate_reports(results: list[InstanceResult]) -> AggregateReport:
     Returns:
         AggregateReport with totals, resolve rate, and ID lists.
     """
-    report = AggregateReport(total_instances=len(results))
+    report = AggregateReport(total=len(results))
 
     for result in results:
         if result.error is not None:
-            report.error_instances += 1
-            report.unresolved_instances += 1
+            report.errors += 1
+            report.failed += 1
             report.error_ids.append(result.instance_id)
-            report.unresolved_ids.append(result.instance_id)
+            report.failed_ids.append(result.instance_id)
         elif not result.patch_exists:
-            report.empty_patch_instances += 1
-            report.unresolved_instances += 1
-            report.unresolved_ids.append(result.instance_id)
+            report.empty += 1
+            report.failed += 1
+            report.failed_ids.append(result.instance_id)
         elif result.resolved:
-            report.resolved_instances += 1
-            report.resolved_ids.append(result.instance_id)
+            report.passed += 1
+            report.passed_ids.append(result.instance_id)
         else:
-            report.unresolved_instances += 1
-            report.unresolved_ids.append(result.instance_id)
+            report.failed += 1
+            report.failed_ids.append(result.instance_id)
 
-    if report.total_instances > 0:
-        report.resolve_rate = report.resolved_instances / report.total_instances
+    report.finalize()
 
     return report
