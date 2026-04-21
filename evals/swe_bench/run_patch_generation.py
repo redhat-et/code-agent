@@ -26,6 +26,7 @@ from pathlib import Path
 import ray
 from swebench.harness.utils import load_swebench_dataset
 
+from evals.common.s3_storage import download_file, upload_file
 from evals.swe_bench.patch_worker import PatchWorker
 from evals.swe_bench.prompt import load_prompt_dataset
 
@@ -67,7 +68,6 @@ def _resolve_prompts(source: str, output_dir: Path) -> Path:
     Otherwise treat as a local path.
     """
     if source.startswith("s3://"):
-        from evals.swe_bench.s3_storage import download_file
         local_path = output_dir / "prompted_dataset.jsonl"
         download_file(source, local_path)
         return local_path
@@ -235,7 +235,6 @@ def _upload_to_s3(local_path: Path, s3_uri: str | None) -> None:
         logger.info("No --s3-output specified, skipping S3 upload")
         return
 
-    from evals.swe_bench.s3_storage import upload_file
     upload_file(local_path, s3_uri)
 
 

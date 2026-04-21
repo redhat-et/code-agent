@@ -15,19 +15,20 @@ import logging
 
 import ray
 
+from evals.common.inference_worker import InferenceWorker
 from .prompt import extract_diff_from_response
 
 logger = logging.getLogger(__name__)
 
 
 @ray.remote(num_cpus=1)
-class PatchWorker:
+class PatchWorker(InferenceWorker):
     """Generates patches for SWE-bench instances via vLLM.
 
-    Each worker processes its assigned instances sequentially.
-    Multiple workers run in parallel across the Ray cluster,
-    each pointing at the same vLLM endpoint (or different
-    endpoints when scaling).
+    Inherits from InferenceWorker and customizes for SWE-bench:
+    - Handles SWE-bench's prompt format (first line = system message)
+    - Extracts patches using swebench's extract_diff
+    - Returns predictions with SWE-bench schema (model_patch)
 
     Args:
         vllm_urls: List of vLLM OpenAI-compatible base URLs.
@@ -37,46 +38,21 @@ class PatchWorker:
         temperature: Sampling temperature.
     """
 
-    def __init__(
-        self,
-        vllm_urls: list[str],
-        model_name: str,
-        max_tokens: int = 4096,
-        temperature: float = 0.0,
-    ):
-        import openai
+    def _generate(self, prompt: str) -> str:
+        """Override to handle SWE-bench's prompt format.
 
-        self.model_name = model_name
-        self.max_tokens = max_tokens
-        self.temperature = temperature
-        if not vllm_urls:
-            raise ValueError("vllm_urls must contain at least one endpoint")
-        self.clients = [
-            openai.OpenAI(base_url=url, api_key="not-needed")
-            for url in vllm_urls
-        ]
-        self._call_count = 0
-
-    def _get_client(self):
-        """Round-robin across vLLM clients."""
-        client = self.clients[self._call_count % len(self.clients)]
-        self._call_count += 1
-        return client
-
-    def _generate_patch(self, instance_id: str, prompt: str) -> tuple[str, str]:
-        """Call vLLM to generate a patch for one instance.
+        SWE-bench convention: first line is the system message,
+        rest is the user message.
 
         Args:
-            instance_id: SWE-bench instance ID (for logging).
             prompt: Pre-built prompt text from swebench's pipeline.
 
         Returns:
-            Tuple of (extracted_patch, raw_response).
+            Raw response from the model.
         """
         client = self._get_client()
 
-        # SWE-bench convention: first line is the system message,
-        # rest is the user message.
+        # Split prompt into system and user messages
         lines = prompt.split("\n", 1)
         if len(lines) == 2:
             system_msg = lines[0]
@@ -97,16 +73,16 @@ class PatchWorker:
             temperature=self.temperature,
         )
 
-        raw = response.choices[0].message.content or ""
-        patch = extract_diff_from_response(raw)
-        return patch, raw
+        return response.choices[0].message.content or ""
 
     def generate_patches(
         self,
         instances: list[dict],
         prompts: dict[str, str],
     ) -> list[dict]:
-        """Generate patches for a batch of instances.
+        """Generate patches for a batch of SWE-bench instances.
+
+        Uses parent's generate_batch with SWE-bench-specific configuration.
 
         Args:
             instances: List of SWE-bench dataset instances.
@@ -116,44 +92,15 @@ class PatchWorker:
             List of dicts with keys: instance_id, model_patch,
             full_output, model_name_or_path, error.
         """
-        results = []
+        results = self.generate_batch(
+            instances=instances,
+            prompts=prompts,
+            extract_fn=extract_diff_from_response,
+            instance_id_key="instance_id",
+        )
 
-        for instance in instances:
-            instance_id = instance["instance_id"]
-            prompt = prompts.get(instance_id)
-
-            if not prompt:
-                logger.error(f"No prompt found for {instance_id}")
-                results.append({
-                    "instance_id": instance_id,
-                    "model_patch": "",
-                    "full_output": "",
-                    "model_name_or_path": self.model_name,
-                    "error": "No prompt found for instance",
-                })
-                continue
-
-            logger.info(f"Generating patch for {instance_id}")
-
-            try:
-                patch, raw = self._generate_patch(instance_id, prompt)
-
-                results.append({
-                    "instance_id": instance_id,
-                    "model_patch": patch,
-                    "full_output": raw,
-                    "model_name_or_path": self.model_name,
-                    "error": None,
-                })
-
-            except Exception as e:
-                logger.error(f"Error generating patch for {instance_id}: {e}")
-                results.append({
-                    "instance_id": instance_id,
-                    "model_patch": "",
-                    "full_output": "",
-                    "model_name_or_path": self.model_name,
-                    "error": str(e),
-                })
+        # Rename 'prediction' to 'model_patch' for SWE-bench schema
+        for result in results:
+            result["model_patch"] = result.pop("prediction")
 
         return results

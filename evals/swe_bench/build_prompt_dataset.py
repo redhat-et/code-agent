@@ -25,61 +25,55 @@ from __future__ import annotations
 
 import argparse
 import logging
+from pathlib import Path
 
 from swebench.harness.utils import load_swebench_dataset
 
+from evals.common.prompt_builder import build_prompted_dataset_main
 from evals.swe_bench.prompt import create_prompt_dataset
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger(__name__)
+
+
+def load_dataset(name: str, split: str) -> list[dict]:
+    """Load SWE-bench dataset."""
+    return load_swebench_dataset(name, split=split)
+
+
+def build_prompts(instances: list[dict], output_path: Path, **kwargs) -> Path:
+    """Build SWE-bench prompts."""
+    return create_prompt_dataset(
+        instances=instances,
+        output_path=output_path,
+        prompt_style=kwargs.get("prompt_style", "style-3"),
+        file_source=kwargs.get("file_source", "oracle"),
+    )
+
+
+def add_swe_bench_args(parser: argparse.ArgumentParser) -> None:
+    """Add SWE-bench-specific arguments."""
+    parser.add_argument(
+        "--prompt-style",
+        type=str,
+        default="style-3",
+        help="SWE-bench prompt style (default: style-3)",
+    )
+    parser.add_argument(
+        "--file-source",
+        type=str,
+        default="oracle",
+        help="Source file selection: oracle, bm25, none (default: oracle)",
+    )
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Build SWE-bench prompted dataset (one-time prep step)"
+    build_prompted_dataset_main(
+        dataset_loader=load_dataset,
+        prompt_builder=build_prompts,
+        default_dataset="SWE-bench/SWE-bench_Lite",
+        description="Build SWE-bench prompted dataset (one-time prep step)",
+        extra_args_fn=add_swe_bench_args,
     )
-    parser.add_argument("--dataset", type=str, default="SWE-bench/SWE-bench_Lite",
-                        help="HuggingFace dataset name")
-    parser.add_argument("--split", type=str, default="test",
-                        help="Dataset split")
-    parser.add_argument("--output", type=str, required=True,
-                        help="Local path to write the prompted dataset JSONL")
-    parser.add_argument("--prompt-style", type=str, default="style-3",
-                        help="SWE-bench prompt style (default: style-3)")
-    parser.add_argument("--file-source", type=str, default="oracle",
-                        help="Source file selection: oracle, bm25, none "
-                             "(default: oracle)")
-    parser.add_argument("--instance-limit", type=int, default=0,
-                        help="Max instances to process (0 = no limit)")
-    parser.add_argument("--s3-output", type=str, default=None,
-                        help="S3 URI to upload the prompted dataset "
-                             "(e.g. s3://swe-bench/prompts/style-3-oracle.jsonl)")
-    args = parser.parse_args()
-
-    # Load dataset
-    logger.info(f"Loading dataset: {args.dataset} split={args.split}")
-    dataset = load_swebench_dataset(args.dataset, split=args.split)
-    logger.info(f"Loaded {len(dataset)} instances")
-
-    if args.instance_limit > 0:
-        dataset = dataset[:args.instance_limit]
-        logger.info(f"Limited to {len(dataset)} instances")
-
-    # Build prompted dataset
-    output_path = create_prompt_dataset(
-        instances=dataset,
-        output_path=args.output,
-        prompt_style=args.prompt_style,
-        file_source=args.file_source,
-    )
-
-    logger.info(f"Prompted dataset written to {output_path}")
-
-    # Upload to S3 if requested
-    if args.s3_output:
-        from evals.swe_bench.s3_storage import upload_file
-        upload_file(output_path, args.s3_output)
-        logger.info(f"Uploaded to {args.s3_output}")
 
 
 if __name__ == "__main__":

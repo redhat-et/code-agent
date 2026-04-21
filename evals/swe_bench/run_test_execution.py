@@ -22,6 +22,7 @@ from pathlib import Path
 import ray
 from swebench.harness.utils import load_swebench_dataset
 
+from evals.common.s3_storage import download_file, upload_file
 from evals.swe_bench.grader import InstanceResult, aggregate_reports
 from evals.swe_bench.test_worker import TestWorker
 
@@ -83,7 +84,6 @@ def _resolve_predictions(source: str, output_dir: Path) -> Path:
         # Sentinel -- caller handles this after loading the dataset
         return None
     if source.startswith("s3://"):
-        from evals.swe_bench.s3_storage import download_file
         local_path = output_dir / "predictions.jsonl"
         download_file(source, local_path)
         return local_path
@@ -260,7 +260,6 @@ def main():
 
     # Upload to S3/MinIO
     if args.s3_output:
-        from evals.swe_bench.s3_storage import upload_file
         upload_file(results_path, args.s3_output)
 
     # Summary
