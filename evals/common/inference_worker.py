@@ -38,6 +38,7 @@ class InferenceWorker:
         temperature: float = 0.0,
         system_message: str | None = None,
         timeout: float = 600.0,
+        key: str = "not-needed"
     ):
         import openai
 
@@ -51,7 +52,7 @@ class InferenceWorker:
             raise ValueError("vllm_urls must contain at least one endpoint")
 
         self.clients = [
-            openai.OpenAI(base_url=url, api_key="not-needed", timeout=timeout)
+            openai.OpenAI(base_url=url, api_key=key, timeout=timeout)
             for url in vllm_urls
         ]
         self._call_count = 0
@@ -91,9 +92,10 @@ class InferenceWorker:
     def generate_batch(
         self,
         instances: list[dict],
-        prompts: dict[str, str],
+        prompts: dict[str, str] | None = None,
         extract_fn: Callable[[str], str] | None = None,
         instance_id_key: str = "instance_id",
+        prompt_key: str = "prompt"
     ) -> list[dict]:
         """Generate predictions for a batch of instances.
 
@@ -112,7 +114,11 @@ class InferenceWorker:
 
         for instance in instances:
             instance_id = instance[instance_id_key]
-            prompt = prompts.get(instance_id)
+
+            if prompts is None:
+                prompt = instance.get(prompt_key)
+            else:
+                prompt = prompts.get(instance_id)
 
             if prompt is None:
                 logger.error(f"No prompt found for {instance_id}")
