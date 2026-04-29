@@ -1,0 +1,53 @@
+---
+# HumanEval evaluate samples created in the generated job on OpenShift
+#
+#   oc delete job human-eval-evaluate-samples -n code-agent
+#   oc apply  -f evals/human-eval/deploy/job-evaluate-samples.yaml
+#   oc apply -f evals/human-eval/deploy/rbac.yaml
+#
+# Usage:
+#   oc apply -f evals/human-eval/deploy/job-evaluate-samples.yaml
+#   oc logs -f job/human-eval-evaluate-samples   # watch progress
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: human-eval-evaluate-samples
+  namespace: code-agent
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400   # 4 hours (generous for a single rate-limit window)
+  template:
+    spec:
+      serviceAccountName: human-eval
+      restartPolicy: Never
+
+      volumes:
+        - name: shared
+          emptyDir: {}
+
+      containers:
+        - name: evaluate-samples
+          image: quay.io/luzuccar/human-eval:v0.0.1
+          command:
+            - python3
+            - -m
+            - evals.human_eval.run_evaluate_worker
+            - --model 
+            - Qwen/Qwen3-1.7B 
+
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
