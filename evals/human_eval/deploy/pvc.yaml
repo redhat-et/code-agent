@@ -1,27 +1,8 @@
----
-# Persistent storage for the /shared volume used by both human-eval jobs.
-# The generate job writes samples here; the evaluate job reads them.
-# Apply this before running either job:
-#   oc apply -f evals/human-eval/deploy/pvc.yaml
+# PersistentVolumeClaims for human-eval
 #
-# To clean up after a run:
-#   oc delete pvc human-eval-shared -n code-agent
-#   oc delete pv  human-eval-shared
-
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: human-eval-data
-spec:
-  capacity:
-    storage: 1Gi
-  accessModes:
-    - ReadWriteOnce
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: manual
-  hostPath:
-    path: /data/generated
-    type: DirectoryOrCreate
+# human-eval-data: stores results from both inference and evaluation
+# Adjust storageClassName for your cluster if needed.
+# The NERC test cluster has storageClassName 'ocs-external-storagecluster-ceph-rbd' as default
 
 ---
 apiVersion: v1
@@ -29,11 +10,12 @@ kind: PersistentVolumeClaim
 metadata:
   name: human-eval-data
   namespace: code-agent
+  labels:
+    app.kubernetes.io/name: human-eval
+    app.kubernetes.io/component: data-cache
 spec:
   accessModes:
     - ReadWriteOnce
   resources:
     requests:
       storage: 1Gi
-  storageClassName: manual
-  volumeName: human-eval-data

@@ -22,9 +22,9 @@ spec:
       restartPolicy: Never
 
       volumes:
-        - name: shared
+        - name: working-dir
           persistentVolumeClaim:
-            claimName: human-eval-shared
+            claimName: human-eval-data
 
       containers:
         - name: generate-samples
@@ -38,8 +38,8 @@ spec:
             - --model 
             - Qwen/Qwen3-1.7B 
           volumeMounts:
-            - name: shared
-              mountPath: /shared
+            - name: working-dir
+              mountPath: /data/generated
           resources:
             requests:
               cpu: 500m
