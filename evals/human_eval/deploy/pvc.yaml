@@ -1,0 +1,21 @@
+# PersistentVolumeClaims for human-eval
+#
+# human-eval-data: stores results from both inference and evaluation
+# Adjust storageClassName for your cluster if needed.
+# The NERC test cluster has storageClassName 'ocs-external-storagecluster-ceph-rbd' as default
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: human-eval-data
+  namespace: code-agent
+  labels:
+    app.kubernetes.io/name: human-eval
+    app.kubernetes.io/component: data-cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

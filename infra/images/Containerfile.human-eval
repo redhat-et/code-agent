@@ -1,0 +1,40 @@
+# Worker image for HumanEval evaluation orchestration.
+#
+# This image runs the workers that:
+#   - Phase 1 : Executes prompt using LLM endpoint to generate code (results)
+#   - Phase 2 : Executes an evaluator (tests) on each generated code snippet
+#
+# Build:
+#   podman build -f infra/images/Containerfile.human-eval \
+#       -t quay.io/luzuccar/human-eval:v0.0.1 .
+#
+# Push:
+#   podman push quay.io/luzuccar/human-eval:v0.0.1
+
+FROM quay.io/modh/ray:2.53.0-py312-cu128
+
+USER 0
+
+# (for prompt execution and grading)
+RUN pip install --no-cache-dir \
+    "openai>=1.0.0" \
+    "datasets" \
+    "boto3" \
+    "tiktoken" \
+    "unidiff" \
+    "transformers" \
+    "mlflow>=2.21.0"
+
+# Install the code-agent evals package
+COPY pyproject.toml /app/pyproject.toml
+COPY evals/ /app/evals/
+RUN pip install --no-cache-dir /app
+RUN mkdir -p /data/generated/samples && mkdir -p /data/generated/results && chown 1001:root /data && chmod 777 -R /data
+COPY evals/human_eval/data/HumanEval.json /data/
+
+USER 1001
+
+ENV HOME=/tmp
+ENV HF_HOME=/tmp/.cache/huggingface
+ENV XDG_CACHE_HOME=/tmp/.cache
+ENV WORKING_DIR=/data
