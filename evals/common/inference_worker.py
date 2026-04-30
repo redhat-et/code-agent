@@ -111,7 +111,18 @@ class InferenceWorker:
         results = []
 
         for instance in instances:
-            instance_id = instance[instance_id_key]
+            instance_id = instance.get(instance_id_key)
+            if instance_id is None:
+                logger.error(f"Missing `{instance_id_key}` in instance: {instance}")
+                results.append({
+                    "instance_id": None,
+                    "prediction": "",
+                    "full_output": "",
+                    "model_name_or_path": self.model_name,
+                    "error": f"Missing `{instance_id_key}` in instance",
+                })
+                continue
+
             prompt = prompts.get(instance_id)
 
             if prompt is None:

@@ -19,12 +19,14 @@ def main():
     parser.add_argument("--timeout", type=float, default=3.0)
     args = parser.parse_args()
 
-    results_dir = Path(args.working_dir + "/results")
-    samples_dir = Path(args.working_dir + "/samples")
+    results_dir = Path(args.working_dir + "/generated/results")
+    samples_dir = Path(args.working_dir + "/generated/samples")
     results_dir.mkdir(parents=True, exist_ok=True)
     samples_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"working dir: {args.working_dir}")
+    logger.info(f"samples dir: {samples_dir}")
+    logger.info(f"results dir: {results_dir}")
     logger.info(f"using model: {args.model}")
     logger.info(f"using problem-file: {args.dataset_file}")
 
@@ -34,13 +36,12 @@ def main():
     else:
         sample_name = name[0].lower().replace(".","-")
 
-    try:
-        sample_file = args.working_dir + "/" + sample_name + ".json"
-        f = open(sample_file)
-    except FileNotFoundError:
-        logger.error(f"sample file {sample_file} not found, have you executed 'run_inference_worker' ?")
-        sys.exit(1)
-
+    sample_file = samples_dir / f"{sample_name}.json"
+    if not sample_file.exists():
+        logger.error(
+            f"sample file {sample_file} not found, have you executed 'run_inference_worker' ?"
+    )
+    sys.exit(1)
 
     results = evaluate_functional_correctness(args.working_dir,sample_name, args.dataset_file, args.workers, args.timeout)
     logger.info(f"executed {results} samples")

@@ -63,7 +63,7 @@ def evaluate_functional_correctness(
                 passed_ids.append(result['task_id'])
             else: 
                 failed += 1
-                passed_ids.append(result['task_id'])
+                failed_ids.append(result['task_id'])
             
             logger.debug(f"result {result['task_id']} {result['passed']}")
         

@@ -23,8 +23,9 @@ spec:
       restartPolicy: Never
 
       volumes:
-        - name: shared
-          emptyDir: {}
+        - name: working-dir
+          persistentVolumeClaim:
+            claimName: human-eval-data
 
       containers:
         - name: evaluate-samples
@@ -38,7 +39,7 @@ spec:
 
           volumeMounts:
             - name: shared
-              mountPath: /shared
+              mountPath: /data/generated
           resources:
             requests:
               cpu: 500m

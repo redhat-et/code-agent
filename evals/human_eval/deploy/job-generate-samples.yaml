@@ -23,7 +23,8 @@ spec:
 
       volumes:
         - name: shared
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: human-eval-shared
 
       containers:
         - name: generate-samples

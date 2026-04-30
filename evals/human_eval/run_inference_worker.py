@@ -13,7 +13,9 @@ class CallableClass:
     def __call__(self, value):
         start_marker = "```python"
         end_marker = "```"
-        start = value.index(start_marker) + len(start_marker)
+        start = value.find(start_marker)
+        if start == -1:
+            return value
         try:
             end = value.index(end_marker, start)
         except ValueError:
@@ -34,8 +36,8 @@ def main():
     system_message = """You are a python code assistant, be concise with your code creation, don't add any preamble, usage, test code or reasoning messages,
     just generate the code, ensure the code generation starts with ```python and ends with ```"""
 
-    results_dir = Path(args.working_dir + "/results")
-    samples_dir = Path(args.working_dir + "/samples")
+    results_dir = Path(args.working_dir + "/generated/results")
+    samples_dir = Path(args.working_dir + "/generated/samples")
     results_dir.mkdir(parents=True, exist_ok=True)
     samples_dir.mkdir(parents=True, exist_ok=True)
 
@@ -44,7 +46,7 @@ def main():
 
     format_output = CallableClass()
 
-    impl = InferenceWorker([args.endpoint_url + "/v1"], args.model, system_message=system_message, api_key=args.api_key)
+    impl = InferenceWorker([args.endpoint_url], args.model, system_message=system_message, api_key=args.api_key)
     results = impl.generate_batch(instances, None, format_output, instance_id_key="task_id", prompt_key="prompt")
 
     name = args.model.split("/")

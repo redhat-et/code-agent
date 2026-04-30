@@ -21,19 +21,21 @@ def unsafe_execute(problem: Dict, completion: str, timeout: float, result):
         chdir = os.chdir
 
         # Disable functionalities that can make destructive changes to the test.
-        reliability_guard()
+        max_mem = int(os.getenv("HUMANEVAL_MAX_MEMORY_BYTES", str(4 * 1024 * 1024 * 1024)))
+        reliability_guard(maximum_memory_bytes=max_mem)
 
-        # Construct the check program and run it.
-        check_program = (
-            problem["prompt"]
-            + completion
-            + "\n"
-            + problem["test"]
-            + "\n"
-            + f"check({problem['entry_point']})"
-        )
-
+       
         try:
+            # Construct the check program and run it.
+            heck_program = (
+                roblem["prompt"]
+                 completion
+                 "\n"
+                 problem["test"]
+                 "\n"
+                 f"check({problem['entry_point']})"
+            
+
             exec_globals = {}
             with swallow_io():
                 with time_limit(timeout):
@@ -71,14 +73,14 @@ def check_correctness(
         the results later even if execution finishes asynchronously.
     """
 
-    manager = multiprocessing.Manager()
-    result = manager.list()
-
-    p = multiprocessing.Process(target=unsafe_execute, args=(problem, completion, timeout, result))
-    p.start()
-    p.join(timeout=timeout + 1)
-    if p.is_alive():
-        p.kill()
+    with multiprocessing.Manager() as manager:
+        result = manager.list()
+        p = multiprocessing.Process(target=unsafe_execute, args=(problem, completion, timeout, result))
+        p.start()
+        p.join(timeout=timeout + 1)
+        if p.is_alive():
+            p.kill()
+            p.join()
 
     if not result:
         result.append("timed out")

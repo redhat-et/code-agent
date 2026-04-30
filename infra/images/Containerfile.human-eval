@@ -29,7 +29,7 @@ RUN pip install --no-cache-dir \
 COPY pyproject.toml /app/pyproject.toml
 COPY evals/ /app/evals/
 RUN pip install --no-cache-dir /app
-RUN mkdir -p /data/samples && mkdir -p /data/results && chown 1001:root /data && chmod 777 -R /data
+RUN mkdir -p /data/generated/samples && mkdir -p /data/generated/results && chown 1001:root /data && chmod 777 -R /data
 COPY evals/human_eval/data/HumanEval.json /data/
 
 USER 1001
