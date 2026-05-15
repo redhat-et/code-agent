@@ -1,0 +1,49 @@
+# Agent config for mini-swe-agent.
+#
+# Uses `mini-extra swebench` in batch mode filtered to a single instance.
+# This produces a native preds.json in the exact SWE-bench format.
+#
+# The agent runs with --environment-class local, meaning it executes
+# commands directly inside the SWE-bench container (no nested Docker).
+
+name: mini-swe-agent
+
+# mini-extra swebench loads the HuggingFace dataset internally
+needs_swebench_dataset: true
+
+install_command: |
+  pip install --quiet mini-swe-agent
+
+agent_command: |
+  mini-extra swebench \
+    --environment-class local \
+    --model openai/{model_name} \
+    --subset {subset} \
+    --split {split} \
+    --filter "^{instance_id}$" \
+    --workers 1 \
+    -o /tmp/output \
+    -c swebench.yaml \
+    -c model.model_kwargs.api_base={model_base_url} \
+    -c model.model_kwargs.api_key={model_api_key} \
+    -c agent.step_limit={step_limit} \
+    -c agent.cost_limit={cost_limit}
+
+# mini-extra swebench writes preds.json natively
+patch_extraction: "preds_json:/tmp/output/preds.json"
+
+env:
+  OPENAI_API_BASE: "{model_base_url}"
+  OPENAI_API_KEY: "{model_api_key}"
+  MSWEA_COST_TRACKING: "ignore_errors"
+
+resources:
+  requests:
+    cpu: "2"
+    memory: "4Gi"
+  limits:
+    cpu: "2"
+    memory: "4Gi"
+    ephemeral-storage: "4Gi"
+
+job_timeout: 600

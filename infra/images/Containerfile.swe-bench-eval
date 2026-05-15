@@ -39,6 +39,11 @@ COPY pyproject.toml /app/pyproject.toml
 COPY evals/ /app/evals/
 RUN pip install --no-cache-dir /app
 
+# Copy agent config YAMLs to the installed package location
+# (setuptools doesn't reliably include non-Python files)
+COPY evals/swe_bench/agents/*.yaml \
+    /opt/app-root/lib64/python3.12/site-packages/evals/swe_bench/agents/
+
 USER 1001
 
 ENV HOME=/tmp

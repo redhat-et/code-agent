@@ -28,3 +28,6 @@ eval = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["evals*"]
+
+[tool.setuptools.package-data]
+"evals.swe_bench" = ["agents/*.yaml"]

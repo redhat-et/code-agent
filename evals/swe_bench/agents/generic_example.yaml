@@ -1,0 +1,44 @@
+# Example agent config for agents that don't have built-in SWE-bench support.
+#
+# This template shows how to integrate any agent. The agent receives the
+# problem statement via a file at {problem_statement_file} and works
+# in {workdir} (/testbed). The orchestrator extracts the patch via git diff
+# after the agent finishes and builds the preds.json entry itself.
+#
+# Copy this file and customize for your agent.
+
+name: my-custom-agent
+
+# The agent does not load the SWE-bench dataset itself;
+# the orchestrator passes the problem statement via env var / file.
+needs_swebench_dataset: false
+
+install_command: |
+  pip install --quiet my-agent-package
+
+agent_command: |
+  my-agent solve \
+    --problem-file {problem_statement_file} \
+    --workdir {workdir} \
+    --model {model_name} \
+    --api-base {model_base_url} \
+    --api-key {model_api_key}
+
+# The orchestrator runs `git diff` in /testbed after the agent exits
+# and wraps the output into the preds.json format.
+patch_extraction: git_diff
+
+env:
+  OPENAI_API_BASE: "{model_base_url}"
+  OPENAI_API_KEY: "{model_api_key}"
+
+resources:
+  requests:
+    cpu: "500m"
+    memory: "2Gi"
+  limits:
+    cpu: "2"
+    memory: "4Gi"
+    ephemeral-storage: "4Gi"
+
+job_timeout: 1800
