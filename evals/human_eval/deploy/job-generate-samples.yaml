@@ -1,0 +1,54 @@
+# HumanEval generate samples using prompt data from the HumanEval dataset on OpenShift
+#
+#   oc delete job human-eval-generate-samples -n code-agent
+#   oc apply  -f evals/human-eval/deploy/job-generate-samples.yaml
+#   oc apply -f evals/human-eval/deploy/rbac.yaml
+#
+# Usage:
+#   oc apply -f evals/human-eval/deploy/job-generate-samples.yaml
+#   oc logs -f job/human-eval-generate-samples   # watch progress
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: human-eval-generate-samples
+  namespace: code-agent
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 14400   # 4 hours (generous for a single rate-limit window)
+  template:
+    spec:
+      serviceAccountName: human-eval
+      restartPolicy: Never
+
+      volumes:
+        - name: working-dir
+          persistentVolumeClaim:
+            claimName: human-eval-data
+
+      containers:
+        - name: generate-samples
+          image: quay.io/luzuccar/human-eval:v0.0.1
+          command:
+            - python3
+            - -m
+            - evals.human_eval.run_inference_worker
+            - --endpoint-url
+            - http://vllm-server:8000/v1
+            - --model 
+            - Qwen/Qwen3-1.7B 
+          volumeMounts:
+            - name: working-dir
+              mountPath: /data/generated
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]

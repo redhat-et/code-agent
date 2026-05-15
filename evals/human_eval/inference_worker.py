@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -34,6 +35,7 @@ class InferenceWorker:
         self,
         vllm_urls: list[str],
         model_name: str,
+        api_key: str,
         max_tokens: int = 4096,
         temperature: float = 0.0,
         system_message: str | None = None,
@@ -51,7 +53,7 @@ class InferenceWorker:
             raise ValueError("vllm_urls must contain at least one endpoint")
 
         self.clients = [
-            openai.OpenAI(base_url=url, api_key="not-needed", timeout=timeout)
+            openai.OpenAI(base_url=url, api_key=api_key, timeout=timeout)
             for url in vllm_urls
         ]
         self._call_count = 0
@@ -83,7 +85,6 @@ class InferenceWorker:
             messages=messages,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
-            timeout=self.timeout
         )
 
         return response.choices[0].message.content or ""
@@ -91,9 +92,10 @@ class InferenceWorker:
     def generate_batch(
         self,
         instances: list[dict],
-        prompts: dict[str, str],
+        prompts: dict[str, str] | None = None,
         extract_fn: Callable[[str], str] | None = None,
         instance_id_key: str = "instance_id",
+        prompt_key: str = "prompt"
     ) -> list[dict]:
         """Generate predictions for a batch of instances.
 
@@ -111,19 +113,12 @@ class InferenceWorker:
         results = []
 
         for instance in instances:
-            instance_id = instance.get(instance_id_key)
-            if instance_id is None:
-                logger.error(f"Missing `{instance_id_key}` in instance: {instance}")
-                results.append({
-                    "instance_id": None,
-                    "prediction": "",
-                    "full_output": "",
-                    "model_name_or_path": self.model_name,
-                    "error": f"Missing `{instance_id_key}` in instance",
-                })
-                continue
+            instance_id = instance[instance_id_key]
 
-            prompt = prompts.get(instance_id)
+            if prompts is None:
+                prompt = instance.get(prompt_key)
+            else:
+                prompt = prompts.get(instance_id)
 
             if prompt is None:
                 logger.error(f"No prompt found for {instance_id}")
@@ -136,10 +131,10 @@ class InferenceWorker:
                 })
                 continue
 
-            logger.info(f"Generating prediction for {instance_id}")
-
             try:
+                logger.info(f"Generating prediction for {instance_id}")
                 raw_response = self._generate(prompt)
+                logger.debug(f"{raw_response}")
 
                 if extract_fn:
                     prediction = extract_fn(raw_response)
