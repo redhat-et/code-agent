@@ -1,0 +1,39 @@
+---
+# ImageStream for the Ray SWE-bench worker image.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: ray-swe-bench
+  namespace: code-agent
+spec:
+  lookupPolicy:
+    local: true   # allows pods in this namespace to reference the image by name
+
+---
+# BuildConfig for the Ray SWE-bench worker image.
+#
+# Builds from local source using the binary strategy so no git remote
+# access is required from the cluster.
+#
+# Usage:
+#   oc apply -f infra/deploy/buildconfig-ray-swe-bench.yaml
+#   oc start-build ray-swe-bench --from-dir=. --follow
+#
+# The built image is pushed to the internal registry and available as:
+#   image-registry.openshift-image-registry.svc:5000/code-agent/ray-swe-bench:latest
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: ray-swe-bench
+  namespace: code-agent
+spec:
+  source:
+    type: Binary
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: infra/images/Containerfile.swe-bench-eval
+  output:
+    to:
+      kind: ImageStreamTag
+      name: ray-swe-bench:latest

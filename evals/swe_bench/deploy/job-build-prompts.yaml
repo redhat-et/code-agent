@@ -31,7 +31,7 @@ spec:
         runAsNonRoot: true
       containers:
         - name: build-prompts
-          image: quay.io/michaelclifford/ray-swe-bench:latest
+          image: image-registry.openshift-image-registry.svc:5000/code-agent/ray-swe-bench:latest
           imagePullPolicy: Always
           securityContext:
             allowPrivilegeEscalation: false

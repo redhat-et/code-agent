@@ -55,7 +55,7 @@ spec:
       initContainers:
         # Step 1: Generate the deduplicated image list
         - name: generate-list
-          image: quay.io/michaelclifford/ray-swe-bench@sha256:d35839b2c3bf6ac0d1ae1d8cddf1ea134706b951ff5e5a87f527b760e2e3341e
+          image: image-registry.openshift-image-registry.svc:5000/code-agent/ray-swe-bench:latest
           command:
             - python
             - -m

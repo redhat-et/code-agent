@@ -1,9 +1,9 @@
 # Ray worker image for SWE-bench evaluation orchestration.
 #
 # This image runs the Ray head and workers that:
-#   - Phase 1 head: Builds prompts using swebench's pipeline (clones repos)
-#   - Phase 1 workers: Call vLLM to generate patches, run AST verification
-#   - Phase 2 workers: Create K8s Jobs for test execution, collect results
+#   - (one-time Job) Build prompts using swebench's pipeline (clones repos)
+#   - (eval workers)  Call vLLM to generate patches, run static verifiers inline,
+#                     and dispatch K8s Jobs for dynamic verification and test execution
 #
 # Actual test execution happens in the pre-built SWE-bench container
 # images (from DockerHub) running as native K8s Jobs.
@@ -37,6 +37,7 @@ RUN pip install --no-cache-dir \
 # Install the code-agent evals package
 COPY pyproject.toml /app/pyproject.toml
 COPY evals/ /app/evals/
+COPY verifiers/ /app/verifiers/
 RUN pip install --no-cache-dir /app
 
 # Copy agent config YAMLs to the installed package location
