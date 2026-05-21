@@ -118,6 +118,7 @@ def save_prediction(output_dir: Path, result: dict) -> None:
     Each instance gets a directory with:
       - prediction.json             (the prediction)
       - report.json                 (eval grading result)
+      - multi_turn.json             (per-turn patches, feedback, and scores; multi-turn only)
       - pod_logs.txt                (full pod stdout, agent strategy only)
       - <instance_id>.traj.json     (agent trajectory, if available)
     """
@@ -140,6 +141,12 @@ def save_prediction(output_dir: Path, result: dict) -> None:
     (instance_dir / "report.json").write_text(
         json.dumps(report_data, indent=2)
     )
+
+    # multi_turn.json (multi-turn runs only)
+    if result.get("multi_turn"):
+        (instance_dir / "multi_turn.json").write_text(
+            json.dumps(result["multi_turn"], indent=2)
+        )
 
     # pod_logs.txt (agent strategy only)
     if result.get("full_logs"):
@@ -187,11 +194,23 @@ def _write_merged_predictions(output_dir: Path, dataset: list) -> Path:
 
 
 def _upload_to_s3(local_path: Path, s3_uri: str | None) -> None:
-    """Upload predictions file to S3 if an S3 URI was provided."""
+    """Upload the predictions file and all per-instance directories to S3.
+
+    The predictions.jsonl goes to s3_uri directly. Per-instance directories
+    are uploaded alongside it under the same S3 prefix.
+    """
     if not s3_uri:
         logger.info("No --s3-output specified, skipping S3 upload")
         return
+
+    from evals.common.s3_storage import upload_dir
+
     upload_file(local_path, s3_uri)
+
+    # Upload per-instance dirs to the same prefix as the predictions file
+    s3_prefix = s3_uri.rsplit("/", 1)[0]
+    output_dir = local_path.parent
+    upload_dir(output_dir, s3_prefix)
 
 
 # ── Verifier set builder (shared across strategies) ─────────────────

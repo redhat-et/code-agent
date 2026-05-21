@@ -336,6 +336,8 @@ class SWEBenchMultiTurnWorker(MultiTurnWorkerBase):
                 "turns": [
                     {
                         "turn": t.turn,
+                        "output": t.output,
+                        "feedback": t.feedback,
                         "aggregate_score": t.aggregate_score,
                         "verifier_results": [
                             {

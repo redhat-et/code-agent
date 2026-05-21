@@ -54,6 +54,34 @@ def upload_file(local_path: str | Path, s3_uri: str) -> None:
     logger.info(f"Upload complete")
 
 
+def upload_dir(local_dir: str | Path, s3_prefix: str) -> None:
+    """Upload all files in a directory tree to S3/MinIO.
+
+    Skips files that are not inside a per-instance subdirectory (e.g.
+    prompted_dataset.jsonl, predictions.jsonl) to avoid re-uploading
+    bulk files. Only files one level deep (instance_id/filename) are
+    uploaded.
+
+    Args:
+        local_dir: Local directory containing per-instance subdirectories.
+        s3_prefix: S3 URI prefix (e.g. s3://bucket/runs/my-run).
+    """
+    bucket, prefix = parse_s3_uri(s3_prefix)
+    s3 = _get_s3_client()
+    local_dir = Path(local_dir)
+    uploaded = 0
+    for instance_dir in local_dir.iterdir():
+        if not instance_dir.is_dir():
+            continue
+        for file in instance_dir.iterdir():
+            if not file.is_file():
+                continue
+            key = f"{prefix}/{instance_dir.name}/{file.name}"
+            s3.upload_file(str(file), bucket, key)
+            uploaded += 1
+    logger.info(f"Uploaded {uploaded} per-instance files to s3://{bucket}/{prefix}/")
+
+
 def download_file(s3_uri: str, local_path: str | Path) -> None:
     """Download a file from S3/MinIO to a local path.
 
