@@ -321,6 +321,8 @@ def _run_agent(args, pending: list, output_dir: Path) -> list[dict]:
     from evals.swe_bench.agent_config import load_agent_config
 
     agent_config = load_agent_config(args.agent_config)
+    if args.job_timeout > 0:
+        agent_config.job_timeout = args.job_timeout
     logger.info(f"Agent: {agent_config.name}")
 
     subset = _resolve_subset_name(args.dataset)
