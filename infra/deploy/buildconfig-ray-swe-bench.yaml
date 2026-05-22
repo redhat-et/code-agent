@@ -12,12 +12,11 @@ spec:
 ---
 # BuildConfig for the Ray SWE-bench worker image.
 #
-# Builds from local source using the binary strategy so no git remote
-# access is required from the cluster.
+# Builds from the code-agent GitHub repository (main branch).
 #
 # Usage:
 #   oc apply -f infra/deploy/buildconfig-ray-swe-bench.yaml
-#   oc start-build ray-swe-bench --from-dir=. --follow
+#   oc start-build ray-swe-bench --follow
 #
 # The built image is pushed to the internal registry and available as:
 #   image-registry.openshift-image-registry.svc:5000/code-agent/ray-swe-bench:latest
@@ -28,7 +27,10 @@ metadata:
   namespace: code-agent
 spec:
   source:
-    type: Binary
+    type: Git
+    git:
+      uri: https://github.com/redhat-et/code-agent.git
+      ref: main
   strategy:
     type: Docker
     dockerStrategy:
