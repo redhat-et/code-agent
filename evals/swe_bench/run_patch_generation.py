@@ -224,21 +224,31 @@ def _build_verifier_set(args):
 
     vset = VerifierSet()
     intermediate_names = set(args.intermediate_verifiers or [])
+    final_names = set(args.final_verifiers or [])
 
-    if "ast_check" in intermediate_names:
-        vset.add(ASTCheckVerifier(), run_intermediate=True, run_final=False)
+    # If --final-verifiers is not provided, default to swe_test only
+    if not final_names:
+        final_names = {"swe_test"}
 
-    # SWE-bench test verifier always runs as final; optionally also intermediate
+    run_ast_intermediate = "ast_check" in intermediate_names
+    run_ast_final = "ast_check" in final_names
+    if run_ast_intermediate or run_ast_final:
+        vset.add(ASTCheckVerifier(),
+                 run_intermediate=run_ast_intermediate,
+                 run_final=run_ast_final)
+
     run_swe_intermediate = "swe_test" in intermediate_names
-    vset.add(
-        SWEBenchUnitTestVerifier(
-            swebench_namespace=args.swebench_namespace,
-            image_registry=args.image_registry or None,
-            timeout=float(args.job_timeout or 1800),
-        ),
-        run_intermediate=run_swe_intermediate,
-        run_final=True,
-    )
+    run_swe_final = "swe_test" in final_names
+    if run_swe_intermediate or run_swe_final:
+        vset.add(
+            SWEBenchUnitTestVerifier(
+                swebench_namespace=args.swebench_namespace,
+                image_registry=args.image_registry or None,
+                timeout=float(args.job_timeout or 1800),
+            ),
+            run_intermediate=run_swe_intermediate,
+            run_final=run_swe_final,
+        )
 
     aggregator = build_aggregator(args.aggregator)
     return vset, aggregator
@@ -381,7 +391,7 @@ def _run_agent(args, pending: list, output_dir: Path) -> list[dict]:
             AgentWorker.remote(
                 agent_config_dict=asdict(agent_config),
                 model_name=args.model_name,
-                model_base_url=args.vllm_url[0],
+                vllm_urls=args.vllm_url,
                 model_api_key=args.model_api_key,
                 k8s_namespace=args.k8s_namespace,
                 service_account=args.service_account,
@@ -493,9 +503,13 @@ def _parse_args() -> argparse.Namespace:
                         help="Max generation attempts per instance "
                              "(1 = single-shot, >1 = multi-turn with feedback)")
     common.add_argument("--intermediate-verifiers", type=str, nargs="*", default=[],
-                        choices=["ast_check"],
+                        choices=["ast_check", "swe_test"],
                         help="Verifiers to run after each intermediate turn. "
-                             "Options: ast_check")
+                             "Options: ast_check, swe_test")
+    common.add_argument("--final-verifiers", type=str, nargs="*", default=None,
+                        choices=["ast_check", "swe_test"],
+                        help="Verifiers to run on the final patch. "
+                             "Default: swe_test only")
     common.add_argument("--aggregator", type=str, default="mean",
                         choices=["mean", "min", "weighted_sum"],
                         help="Score aggregation strategy for multi-turn")
@@ -633,12 +647,15 @@ def main():
     logger.info(f"  Errors:             {errors}")
 
     if uses_multi_turn or agent_with_eval:
-        resolved = sum(1 for r in all_results if r.get("resolved") is True)
-        evaluated = sum(1 for r in all_results if r.get("resolved") is not None)
-        rate = resolved / evaluated if evaluated > 0 else 0
-        logger.info(f"  Evaluated:          {evaluated}")
-        logger.info(f"  Resolved:           {resolved}")
-        logger.info(f"  Resolve rate:       {rate:.1%}")
+        evaluated = [r for r in all_results
+                     if not r.get("error") and r.get("resolved") is not None]
+        resolved = [r for r in evaluated if r.get("resolved") is True]
+        resolve_rate = len(resolved) / len(evaluated) if evaluated else 0
+        completion_rate = len(evaluated) / total if total > 0 else 0
+        logger.info(f"  Evaluated:          {len(evaluated)}/{total}")
+        logger.info(f"  Completion rate:    {completion_rate:.1%}")
+        logger.info(f"  Resolved:           {len(resolved)}")
+        logger.info(f"  Resolve rate:       {resolve_rate:.1%}")
 
     if uses_multi_turn:
         turn_counts = [
@@ -667,13 +684,16 @@ def main():
 
 def _write_aggregate_results(output_dir: Path, all_results: list[dict]) -> None:
     """Write aggregate results.json from eval results."""
-    evaluated = [r for r in all_results if r.get("resolved") is not None]
-    resolved = [r for r in evaluated if r.get("resolved") is True]
     errors = [r for r in all_results if r.get("error")]
+    evaluated = [r for r in all_results
+                 if not r.get("error") and r.get("resolved") is not None]
+    resolved = [r for r in evaluated if r.get("resolved") is True]
 
+    total = len(all_results)
     report = {
-        "total_instances": len(all_results),
+        "total_instances": total,
         "evaluated": len(evaluated),
+        "completion_rate": len(evaluated) / total if total > 0 else 0,
         "resolved_instances": len(resolved),
         "unresolved_instances": len(evaluated) - len(resolved),
         "error_instances": len(errors),
@@ -745,9 +765,12 @@ def _log_to_mlflow(args, total, patches_generated, errors, all_results,
                 "generation_errors": errors,
             }
             if uses_multi_turn or agent_with_eval:
-                resolved = sum(1 for r in all_results if r.get("resolved") is True)
-                evaluated = sum(1 for r in all_results if r.get("resolved") is not None)
+                evaluated = sum(1 for r in all_results
+                                if not r.get("error") and r.get("resolved") is not None)
+                resolved = sum(1 for r in all_results
+                               if not r.get("error") and r.get("resolved") is True)
                 metrics["evaluated"] = evaluated
+                metrics["completion_rate"] = evaluated / total if total else 0
                 metrics["resolved"] = resolved
                 metrics["resolve_rate"] = resolved / evaluated if evaluated else 0
 

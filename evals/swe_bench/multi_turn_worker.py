@@ -89,7 +89,6 @@ class SWEBenchMultiTurnWorker(MultiTurnWorkerBase):
         self.strategy = strategy
         self.swebench_namespace = swebench_namespace
         self.image_registry = image_registry
-        self.vllm_urls = vllm_urls
 
         self.k8s_namespace = k8s_namespace or _detect_namespace()
         self.service_account = service_account
@@ -187,7 +186,7 @@ class SWEBenchMultiTurnWorker(MultiTurnWorkerBase):
             template_vars = {
                 "instance_id": instance_id,
                 "model_name": self.model_name,
-                "model_base_url": self.vllm_urls[0],
+                "model_base_url": self._get_vllm_url(),
                 "model_api_key": self.model_api_key,
                 "workdir": DOCKER_WORKDIR,
                 "problem_statement_file": "/tmp/problem_statement.txt",
@@ -232,8 +231,8 @@ class SWEBenchMultiTurnWorker(MultiTurnWorkerBase):
             return prediction.get("model_patch", "")
 
         except Exception as e:
-            logger.error(f"[{instance_id}] Turn {turn_idx}: agent Job failed: {e}")
-            return ""
+            logger.exception(f"[{instance_id}] Turn {turn_idx}: agent Job failed")
+            raise RuntimeError(f"Agent turn {turn_idx} failed for {instance_id}") from e
         finally:
             if job_name:
                 _delete_job(self.batch_api, job_name, self.k8s_namespace)
@@ -376,7 +375,7 @@ def _error_result(instance_id: str, model_name: str, error: str) -> dict:
         "model_name_or_path": model_name,
         "error": error,
         "eval_report": {},
-        "resolved": False,
+        "resolved": None,
         "multi_turn": {"num_turns": 0, "stopped_early": False,
                        "final_aggregate_score": 0.0, "turns": []},
     }

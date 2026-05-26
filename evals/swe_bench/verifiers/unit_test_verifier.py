@@ -110,13 +110,23 @@ class SWEBenchUnitTestVerifier(BaseVerifier):
 
         logger.info(f"[{instance_id}] Running K8s Job with image {image}")
 
-        job_result = runner.run_instance(
-            instance_id=instance_id,
-            run_id=run_id,
-            image=image,
-            model_patch=model_patch,
-            eval_script=eval_script,
-        )
+        try:
+            job_result = runner.run_instance(
+                instance_id=instance_id,
+                run_id=run_id,
+                image=image,
+                model_patch=model_patch,
+                eval_script=eval_script,
+            )
+        except Exception as e:
+            logger.exception("[%s] unit-test job execution failed", instance_id)
+            return VerifierResult(
+                name=self.name,
+                status=VerifierStatus.ERROR,
+                score=0.0,
+                pass_threshold = self.pass_threshold,
+                details = {"error": str(e)},
+            )
 
         if job_result.error:
             return VerifierResult(
@@ -146,11 +156,23 @@ class SWEBenchUnitTestVerifier(BaseVerifier):
             "model_patch": model_patch,
             "model_name_or_path": ctx.metadata.get("model_name", "unknown"),
         }
-        grade_result = grade_instance(
-            test_spec=test_spec,
-            prediction=prediction,
-            test_output=job_result.test_output,
-        )
+
+        try:
+            grade_result = grade_instance(
+                test_spec=test_spec,
+                prediction=prediction,
+                test_output=job_result.test_output,
+            )
+        except Exception as e:
+            logger.exception("[%s] grading failed", instance_id)
+            return VerifierResult(
+                name=self.name,
+                status=VerifierStatus.ERROR,
+                score=0.0,
+                pass_threshold=self.pass_threshold,
+                details={"error": str(e)},
+                stdout=job_result.test_output,
+            )
 
         score = 1.0 if grade_result.resolved else 0.0
         status = "RESOLVED" if grade_result.resolved else "NOT RESOLVED"

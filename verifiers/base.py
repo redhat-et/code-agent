@@ -80,7 +80,8 @@ class BaseVerifier(ABC):
         super().__init_subclass__(**kwargs)
         # Only enforce on concrete (non-abstract) subclasses
         if not getattr(cls, "__abstractmethods__", None):
-            if not hasattr(cls, "execution_mode"):
+            mode = getattr(cls, "execution_mode", None)
+            if mode not in {"static", "dynamic"}:
                 raise TypeError(
                     f"{cls.__name__} must define an 'execution_mode' class attribute "
                     f"(Literal['static', 'dynamic'])"
@@ -94,6 +95,11 @@ class BaseVerifier(ABC):
     ):
         self.config = config or {}
         self.timeout = timeout
+
+        if not 0.0 <= pass_threshold <= 1.0:
+            raise ValueError(
+                f"pass_threshold must be in [0.0, 1.0], got {pass_threshold}"
+            )
         self.pass_threshold = pass_threshold
 
     @property
@@ -141,6 +147,7 @@ class BaseVerifier(ABC):
                 self.verify(ctx),
                 timeout=self.timeout
             )
+            result.pass_threshold = self.pass_threshold
             result.wall_clock_seconds = time.monotonic() - start
             return result
         except asyncio.TimeoutError:

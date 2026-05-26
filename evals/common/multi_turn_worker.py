@@ -60,6 +60,7 @@ class MultiTurnWorkerBase:
         self.max_turns = max_turns
         self.max_concurrent_jobs = max_concurrent_jobs
 
+        self.vllm_urls = vllm_urls
         self.clients = [
             openai.OpenAI(base_url=url, api_key="not-needed", timeout=600.0)
             for url in vllm_urls
@@ -73,10 +74,16 @@ class MultiTurnWorkerBase:
 
     # ── vLLM (naive generation) ─────────────────────────────────────────────
 
-    def _get_client(self):
-        client = self.clients[self._call_count % len(self.clients)]
+    def _next_index(self) -> int:
+        idx = self._call_count % len(self.clients)
         self._call_count += 1
-        return client
+        return idx
+
+    def _get_client(self):
+        return self.clients[self._next_index()]
+
+    def _get_vllm_url(self) -> str:
+        return self.vllm_urls[self._next_index()]
 
     def _generate_naive(self, messages: list[dict]) -> str:
         """Generate a response via inline vLLM inference."""
@@ -94,7 +101,7 @@ class MultiTurnWorkerBase:
     def _run_verifier_set_inline(self, vset: VerifierSet, ctx) -> list[VerifierResult]:
         """Run all verifiers in vset concurrently (async, in-process)."""
         async def _run_all():
-            return [await entry.verifier.safe_verify(ctx) for entry in vset.entries]
+            return await asyncio.gather(*(entry.verifier.safe_verify(ctx) for entry in vset.entries))
         return asyncio.run(_run_all())
 
     def _run_mixed_verifier_set(self, vset: VerifierSet, ctx) -> list[VerifierResult]:
@@ -149,4 +156,16 @@ class MultiTurnWorkerBase:
         run_id: str,
     ) -> list[dict]:
         """Evaluate a batch of instances sequentially."""
-        return [self._evaluate_instance(inst, prompts, run_id) for inst in instances]
+        results: list[dict] = []
+        for inst in instances:
+            try:
+                results.append(self._evaluate_instance(inst, prompts, run_id))
+            except Exception as e:
+                instance_id = inst.get("instance_id")
+                logger.exception("Failed evaluating instance %s", instance_id)
+                results.append({
+                        "instance_id": instance_id,
+                        "error": str(e),
+                        "resolved": False,
+                })
+        return results

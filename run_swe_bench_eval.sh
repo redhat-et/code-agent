@@ -55,6 +55,7 @@ MLFLOW_TRACKING_URI="${MLFLOW_TRACKING_URI:-}"
 # ── Multi-turn config (applies to both strategies) ─────────────
 MAX_TURNS="${MAX_TURNS:-1}"
 INTERMEDIATE_VERIFIERS="${INTERMEDIATE_VERIFIERS:-}"  # space-separated, e.g. "ast_check"
+FINAL_VERIFIERS="${FINAL_VERIFIERS:-}"              # space-separated, default: swe_test
 AGGREGATOR="${AGGREGATOR:-mean}"
 
 # ── Naive strategy config ──────────────────────────────────────
@@ -102,6 +103,13 @@ CMD_ARGS=(
 if [[ -n "${INTERMEDIATE_VERIFIERS}" ]]; then
     for v in ${INTERMEDIATE_VERIFIERS}; do
         CMD_ARGS+=(--intermediate-verifiers "${v}")
+    done
+fi
+
+# Append each final verifier as a separate arg
+if [[ -n "${FINAL_VERIFIERS}" ]]; then
+    for v in ${FINAL_VERIFIERS}; do
+        CMD_ARGS+=(--final-verifiers "${v}")
     done
 fi
 
@@ -153,7 +161,10 @@ if [[ -n "${MLFLOW_TRACKING_URI}" ]]; then
 fi
 
 echo "Strategy: ${STRATEGY}, max_turns: ${MAX_TURNS}"
-echo "Running: ray job submit -- ${CMD_ARGS[*]}"
+# Redact secrets before logging
+DISPLAY_CMD="${CMD_ARGS[*]}"
+DISPLAY_CMD=$(echo "${DISPLAY_CMD}" | sed -E 's/(--model-api-key )[^ ]+/\1***REDACTED***/g')
+echo "Running: ray job submit -- ${DISPLAY_CMD}"
 
 ray job submit \
     --address="${RAY_ADDRESS}" \
