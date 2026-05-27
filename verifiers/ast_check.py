@@ -263,6 +263,7 @@ class ASTCheckVerifier(BaseVerifier):
 
         errors: list[dict[str, Any]] = []
         parsed = 0
+        errored = 0
         skipped = 0  # files not present in the diff (e.g. pure deletions)
 
         for filepath in python_files:
@@ -285,10 +286,12 @@ class ASTCheckVerifier(BaseVerifier):
                     errors.append(error)
                     file_has_error = True
 
-            if not file_has_error:
+            if file_has_error:
+                errored += 1
+            else:
                 parsed += 1
 
-        checkable = parsed + len(errors)
+        checkable = parsed + errored
         score = parsed / checkable if checkable > 0 else 1.0
 
         return VerifierResult(
@@ -302,6 +305,6 @@ class ASTCheckVerifier(BaseVerifier):
                 "files_checkable": checkable,
                 "files_parsed": parsed,
                 "files_skipped": skipped,
-                "files_errored": len(errors),
+                "files_errored": errored,
             },
         )

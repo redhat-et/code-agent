@@ -99,18 +99,14 @@ CMD_ARGS=(
     --aggregator "${AGGREGATOR}"
 )
 
-# Append each intermediate verifier as a separate arg
+# Append intermediate verifiers as a single flag followed by all values
 if [[ -n "${INTERMEDIATE_VERIFIERS}" ]]; then
-    for v in ${INTERMEDIATE_VERIFIERS}; do
-        CMD_ARGS+=(--intermediate-verifiers "${v}")
-    done
+    CMD_ARGS+=(--intermediate-verifiers ${INTERMEDIATE_VERIFIERS})
 fi
 
-# Append each final verifier as a separate arg
+# Append final verifiers as a single flag followed by all values
 if [[ -n "${FINAL_VERIFIERS}" ]]; then
-    for v in ${FINAL_VERIFIERS}; do
-        CMD_ARGS+=(--final-verifiers "${v}")
-    done
+    CMD_ARGS+=(--final-verifiers ${FINAL_VERIFIERS})
 fi
 
 if [[ "${STRATEGY}" == "naive" ]]; then

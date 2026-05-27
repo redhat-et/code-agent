@@ -79,6 +79,7 @@ def upload_dir(local_dir: str | Path, s3_prefix: str) -> None:
                 continue
             rel = file.relative_to(local_dir).as_posix()
             key = f"{prefix}/{rel}" if prefix else rel
+            s3.upload_file(str(file), bucket, key)
             uploaded += 1
     logger.info(f"Uploaded {uploaded} per-instance files to s3://{bucket}/{prefix}/")
 
