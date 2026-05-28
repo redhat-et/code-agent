@@ -64,14 +64,21 @@ async def _run_git(*args: str, cwd: str | None = None) -> tuple[int, str, str]:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate()
-    return proc.returncode, stdout.decode(), stderr.decode()
+    try:
+        stdout, stderr = await proc.communicate()
+        return proc.returncode, stdout.decode(), stderr.decode()
+    except asyncio.CancelledError:
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+        raise
 
 
 async def _clone_and_parse(
     repo: str,
     base_commit: str,
     patch_diff: str,
+    all_changed_files: list[str],
     python_files: list[str],
     verifier_name: str,
     pass_threshold: float,
@@ -96,7 +103,7 @@ async def _clone_and_parse(
             return None
 
         rc, _, stderr = await _run_git(
-            "sparse-checkout", "set", "--skip-checks", *python_files, cwd=repo_dir,
+            "sparse-checkout", "set", "--skip-checks", *all_changed_files, cwd=repo_dir,
         )
         if rc != 0:
             logger.warning("ast_check: sparse-checkout failed: %s", stderr.strip())
@@ -439,6 +446,7 @@ class ASTCheckVerifier(BaseVerifier):
                 repo=repo,
                 base_commit=base_commit,
                 patch_diff=ctx.patch_diff,
+                all_changed_files=ctx.changed_files,
                 python_files=python_files,
                 verifier_name=self.name,
                 pass_threshold=self.pass_threshold,
