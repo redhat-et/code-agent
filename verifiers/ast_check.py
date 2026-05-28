@@ -2,16 +2,20 @@
 AST validity verifier (static).
 
 Checks that all changed Python files introduced by the patch parse successfully.
-Works entirely from the patch diff — no repo checkout required.
 
-For each changed .py file, every hunk in the unified diff is parsed
-independently.  The @@ hunk header supplies the new-file line offset so
-that reported error line numbers map back to the patched file.  Parsing
-each hunk in isolation avoids the false adjacency problem that occurs
-when multiple hunks are naively concatenated (gaps between hunks are
-unknown original lines that would break syntax if omitted).
+Two parsing strategies, tried in order:
 
-Parsing strategy (applied per hunk, in order):
+  1. **Full-file parsing** (preferred): when SWE-bench metadata is available
+     (repo name and base commit), performs a shallow sparse clone of the
+     repository, checks out the base commit, applies the patch, and runs
+     ast.parse() on each complete modified Python file.  This eliminates
+     the false positives inherent in fragment-based parsing.
+
+  2. **Hunk-based parsing** (fallback): when repo metadata is unavailable or
+     the clone fails, falls back to parsing each unified-diff hunk in
+     isolation.  This works entirely from the patch diff string with no I/O.
+
+Hunk-based parsing strategy (applied per hunk, in order):
   1. Try ast.parse() on the raw reconstructed fragment.
   2. If that fails with an indentation error on line 1 (fragment starts mid-block),
      apply textwrap.dedent() and retry.
@@ -19,22 +23,23 @@ Parsing strategy (applied per hunk, in order):
      levels after dedent), wrap in "async def _():\\n    if True:\\n" and retry.
   4. A failure at any stage with a non-indentation error, or a failure of the
      wrapped version, is reported as a real syntax error.
-
-Line numbers in reported errors are adjusted to refer to the new file,
-not to the hunk-local fragment or any wrapper lines added during parsing.
-
-Error feedback includes a short code snippet showing the lines around the error,
-with '+' prefixes on added lines and ' ' prefixes on context lines.
 """
 
 from __future__ import annotations
 
 import ast
+import asyncio
+import logging
+import os
 import re
+import shutil
+import tempfile
 import textwrap
 from typing import Any, ClassVar, Literal
 
 from .base import BaseVerifier, PatchContext, VerifierResult, VerifierStatus
+
+logger = logging.getLogger(__name__)
 
 # Number of lines prepended by the wrapper in step 3.
 _WRAPPER = "async def _():\n    if True:\n"
@@ -46,6 +51,159 @@ _SNIPPET_BEFORE = 2
 _SNIPPET_AFTER = 1
 
 _HUNK_HEADER_RE = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+
+# ── Full-file parsing (preferred) ──────────────────────────────────────
+
+
+async def _run_git(*args: str, cwd: str | None = None) -> tuple[int, str, str]:
+    """Run a git command asynchronously. Returns (returncode, stdout, stderr)."""
+    proc = await asyncio.create_subprocess_exec(
+        "git", *args,
+        cwd=cwd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    return proc.returncode, stdout.decode(), stderr.decode()
+
+
+async def _clone_and_parse(
+    repo: str,
+    base_commit: str,
+    patch_diff: str,
+    python_files: list[str],
+    verifier_name: str,
+    pass_threshold: float,
+) -> VerifierResult | None:
+    """Clone the repo, apply the patch, and parse full Python files.
+
+    Returns a VerifierResult on success, or None if the git operations fail
+    (signaling the caller to fall back to hunk-based parsing).
+    """
+    tmpdir = tempfile.mkdtemp(prefix="ast_check_")
+    repo_dir = os.path.join(tmpdir, "repo")
+
+    try:
+        url = f"https://github.com/{repo}.git"
+
+        rc, _, stderr = await _run_git(
+            "clone", "--depth", "1", "--filter=blob:none",
+            "--sparse", url, repo_dir,
+        )
+        if rc != 0:
+            logger.warning("ast_check: git clone failed: %s", stderr.strip())
+            return None
+
+        rc, _, stderr = await _run_git(
+            "sparse-checkout", "set", "--skip-checks", *python_files, cwd=repo_dir,
+        )
+        if rc != 0:
+            logger.warning("ast_check: sparse-checkout failed: %s", stderr.strip())
+            return None
+
+        rc, _, stderr = await _run_git(
+            "fetch", "--depth", "1", "origin", base_commit, cwd=repo_dir,
+        )
+        if rc != 0:
+            logger.warning("ast_check: git fetch failed: %s", stderr.strip())
+            return None
+
+        rc, _, stderr = await _run_git(
+            "checkout", base_commit, cwd=repo_dir,
+        )
+        if rc != 0:
+            logger.warning("ast_check: git checkout failed: %s", stderr.strip())
+            return None
+
+        patch_file = os.path.join(tmpdir, "patch.diff")
+        with open(patch_file, "w") as f:
+            f.write(patch_diff)
+
+        rc, _, stderr = await _run_git(
+            "apply", patch_file, cwd=repo_dir,
+        )
+        if rc != 0:
+            logger.warning("ast_check: git apply failed: %s", stderr.strip())
+            return None
+
+        errors: list[dict[str, Any]] = []
+        parsed = 0
+        errored = 0
+        skipped = 0
+
+        for filepath in python_files:
+            full_path = os.path.join(repo_dir, filepath)
+            if not os.path.isfile(full_path):
+                skipped += 1
+                continue
+
+            try:
+                with open(full_path) as f:
+                    content = f.read()
+            except OSError:
+                skipped += 1
+                continue
+
+            try:
+                ast.parse(content, filename=filepath)
+                parsed += 1
+            except SyntaxError as e:
+                errored += 1
+                snippet = _build_full_file_snippet(content, e.lineno)
+                errors.append({
+                    "file": filepath,
+                    "line": e.lineno,
+                    "offset": e.offset,
+                    "message": e.msg,
+                    "snippet": snippet,
+                })
+
+        checkable = parsed + errored
+        score = parsed / checkable if checkable > 0 else 1.0
+
+        return VerifierResult(
+            name=verifier_name,
+            status=VerifierStatus.OK,
+            score=score,
+            pass_threshold=pass_threshold,
+            details={
+                "errors": errors,
+                "method": "full_file",
+                "files_total": len(python_files),
+                "files_checkable": checkable,
+                "files_parsed": parsed,
+                "files_skipped": skipped,
+                "files_errored": errored,
+            },
+        )
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _build_full_file_snippet(content: str, error_lineno: int | None) -> str | None:
+    """Build a code snippet around the error line from full file content."""
+    if error_lineno is None:
+        return None
+
+    lines = content.splitlines()
+    if not (1 <= error_lineno <= len(lines)):
+        return None
+
+    start = max(0, error_lineno - 1 - _SNIPPET_BEFORE)
+    end = min(len(lines), error_lineno + _SNIPPET_AFTER)
+
+    snippet_lines = []
+    for i in range(start, end):
+        lineno = i + 1
+        marker = "-->" if lineno == error_lineno else "   "
+        snippet_lines.append(f"    {marker} {lineno:4d}   {lines[i]}")
+
+    return "\n".join(snippet_lines)
+
+
+# ── Hunk-based parsing (fallback) ──────────────────────────────────────
 
 
 def _parse_hunk_new_start(header: str) -> int:
@@ -224,10 +382,21 @@ def _parse_fragment(
     return _make_error(lineno, err.offset, err.msg)
 
 
+# ── Verifier class ─────────────────────────────────────────────────────
+
+
 class ASTCheckVerifier(BaseVerifier):
-    """Static verifier: checks Python syntax of all changed files in the patch."""
+    """Static verifier: checks Python syntax of all changed files in the patch.
+
+    Uses full-file parsing when SWE-bench metadata (repo, base_commit) is
+    available; falls back to hunk-based parsing otherwise.
+    """
 
     execution_mode: ClassVar[Literal["static", "dynamic"]] = "static"
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("timeout", 120.0)
+        super().__init__(**kwargs)
 
     @property
     def name(self) -> str:
@@ -261,10 +430,33 @@ class ASTCheckVerifier(BaseVerifier):
                 details={"message": "No Python files changed"},
             )
 
+        instance_data = ctx.metadata.get("instance_data", {})
+        repo = instance_data.get("repo")
+        base_commit = instance_data.get("base_commit")
+
+        if repo and base_commit:
+            result = await _clone_and_parse(
+                repo=repo,
+                base_commit=base_commit,
+                patch_diff=ctx.patch_diff,
+                python_files=python_files,
+                verifier_name=self.name,
+                pass_threshold=self.pass_threshold,
+            )
+            if result is not None:
+                return result
+            logger.info("ast_check: full-file parsing failed, falling back to hunk parsing")
+
+        return self._verify_from_hunks(ctx, python_files)
+
+    def _verify_from_hunks(
+        self, ctx: PatchContext, python_files: list[str],
+    ) -> VerifierResult:
+        """Fallback: parse each diff hunk in isolation."""
         errors: list[dict[str, Any]] = []
         parsed = 0
         errored = 0
-        skipped = 0  # files not present in the diff (e.g. pure deletions)
+        skipped = 0
 
         for filepath in python_files:
             hunks = _extract_new_content(ctx.patch_diff, filepath)
@@ -301,6 +493,7 @@ class ASTCheckVerifier(BaseVerifier):
             pass_threshold=self.pass_threshold,
             details={
                 "errors": errors,
+                "method": "hunk",
                 "files_total": len(python_files),
                 "files_checkable": checkable,
                 "files_parsed": parsed,
