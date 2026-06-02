@@ -519,7 +519,7 @@ class AgentWorker:
         self,
         agent_config_dict: dict,
         model_name: str,
-        model_base_url: str,
+        vllm_urls: list[str],
         model_api_key: str = "dummy",
         k8s_namespace: str | None = None,
         service_account: str = "swe-bench-eval",
@@ -538,7 +538,10 @@ class AgentWorker:
         if job_timeout > 0:
             self.agent_config.job_timeout = job_timeout
         self.model_name = model_name
-        self.model_base_url = model_base_url
+        if not vllm_urls:
+            raise ValueError("vllm_urls must contain at least one endpoint")
+        self._vllm_urls = vllm_urls
+        self._call_count = 0
         self.model_api_key = model_api_key
         self.k8s_namespace = k8s_namespace or _detect_namespace()
         self.service_account = service_account
@@ -552,6 +555,11 @@ class AgentWorker:
         self.run_eval = run_eval
 
         self.batch_api, self.core_api = _init_k8s()
+
+    def _get_vllm_url(self) -> str:
+        url = self._vllm_urls[self._call_count % len(self._vllm_urls)]
+        self._call_count += 1
+        return url
 
     def _generate_one(self, instance: dict, run_id: str) -> dict:
         """Run an agent on a single SWE-bench instance via a K8s Job.
@@ -570,7 +578,7 @@ class AgentWorker:
             template_vars = {
                 "instance_id": instance_id,
                 "model_name": self.model_name,
-                "model_base_url": self.model_base_url,
+                "model_base_url": self._get_vllm_url(),
                 "model_api_key": self.model_api_key,
                 "workdir": DOCKER_WORKDIR,
                 "problem_statement_file": "/tmp/problem_statement.txt",

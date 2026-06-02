@@ -33,80 +33,19 @@ class InstanceResult:
 
 @dataclass
 class AggregateReport(BaseAggregateReport):
-    """Aggregate report across all evaluated SWE-bench instances.
-
-    Inherits common aggregation structure from BaseAggregateReport.
-    Adds SWE-bench-specific field aliases for compatibility.
-    """
-
-    # Aliases for base class fields (for backward compatibility)
-    @property
-    def total_instances(self) -> int:
-        return self.total
-
-    @total_instances.setter
-    def total_instances(self, value: int) -> None:
-        self.total = value
-
-    @property
-    def resolved_instances(self) -> int:
-        return self.passed
-
-    @resolved_instances.setter
-    def resolved_instances(self, value: int) -> None:
-        self.passed = value
-
-    @property
-    def unresolved_instances(self) -> int:
-        return self.failed
-
-    @unresolved_instances.setter
-    def unresolved_instances(self, value: int) -> None:
-        self.failed = value
-
-    @property
-    def error_instances(self) -> int:
-        return self.errors
-
-    @error_instances.setter
-    def error_instances(self, value: int) -> None:
-        self.errors = value
-
-    @property
-    def empty_patch_instances(self) -> int:
-        return self.empty
-
-    @empty_patch_instances.setter
-    def empty_patch_instances(self, value: int) -> None:
-        self.empty = value
-
-    @property
-    def resolve_rate(self) -> float:
-        return self.pass_rate
-
-    @resolve_rate.setter
-    def resolve_rate(self, value: float) -> None:
-        self.pass_rate = value
-
-    @property
-    def resolved_ids(self) -> list[str]:
-        return self.passed_ids
-
-    @property
-    def unresolved_ids(self) -> list[str]:
-        return self.failed_ids
+    """Aggregate report across all evaluated SWE-bench instances."""
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict with SWE-bench field names."""
         return {
-            "total_instances": self.total_instances,
-            "resolved_instances": self.resolved_instances,
-            "unresolved_instances": self.unresolved_instances,
-            "error_instances": self.error_instances,
-            "empty_patch_instances": self.empty_patch_instances,
-            "resolve_rate": self.resolve_rate,
-            "resolved_ids": self.resolved_ids,
-            "unresolved_ids": self.unresolved_ids,
+            "total_instances": self.total,
+            "resolved_instances": self.passed,
+            "unresolved_instances": self.failed,
+            "error_instances": self.errors,
+            "empty_patch_instances": self.empty,
+            "resolve_rate": self.pass_rate,
+            "resolved_ids": self.passed_ids,
+            "unresolved_ids": self.failed_ids,
             "error_ids": self.error_ids,
         }
 

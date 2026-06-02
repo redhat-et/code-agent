@@ -27,7 +27,7 @@ eval = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["evals*"]
+include = ["evals*", "verifiers*"]
 
 [tool.setuptools.package-data]
 "evals.swe_bench" = ["agents/*.yaml"]

@@ -1,14 +1,15 @@
-"""Phase 1: Generate patches for SWE-bench instances.
+"""SWE-bench evaluation: patch generation and test execution.
 
-Supports two strategies:
-  - naive: Single-shot vLLM inference from pre-built prompts.
-  - agent: Agentic loop using mini-swe-agent (or any agent via YAML config)
-           running inside K8s Jobs with SWE-bench container images.
+Supports two strategies, both of which optionally support multi-turn iteration:
+  - naive:  vLLM inference from pre-built prompts, followed by K8s-based test
+            execution. With --max-turns > 1, the model receives intermediate
+            feedback (from configurable verifiers) and can revise its patch.
+  - agent:  Agentic loop using mini-swe-agent (or any agent via YAML config)
+            running inside K8s Jobs with SWE-bench container images.
+            With --max-turns > 1, the agent runs repeatedly, receiving feedback
+            from intermediate verifiers between attempts.
 
-Distributes work across Ray workers, saves per-instance results,
-and merges into predictions.jsonl for Phase 2 or sb-cli evaluation.
-
-Usage (naive):
+Usage (naive, single-shot):
     python -m evals.swe_bench.run_patch_generation \
         --strategy naive \
         --vllm-url http://vllm-server:8000/v1 \
@@ -16,12 +17,33 @@ Usage (naive):
         --prompts s3://swe-bench/prompts/style-3-oracle.jsonl \
         --output-dir /tmp/swe-bench-results/
 
-Usage (agent):
+Usage (naive, multi-turn):
+    python -m evals.swe_bench.run_patch_generation \
+        --strategy naive \
+        --vllm-url http://vllm-server:8000/v1 \
+        --model-name Qwen/Qwen3-1.7B \
+        --prompts s3://swe-bench/prompts/style-3-oracle.jsonl \
+        --max-turns 3 \
+        --intermediate-verifiers ast_check \
+        --aggregator mean \
+        --output-dir /tmp/swe-bench-results/
+
+Usage (agent, single-shot):
     python -m evals.swe_bench.run_patch_generation \
         --strategy agent \
         --vllm-url http://vllm-server:8000/v1 \
         --model-name Qwen/Qwen3-1.7B \
         --agent-config evals/swe_bench/agents/mini_swe_agent.yaml \
+        --output-dir /tmp/swe-bench-results/
+
+Usage (agent, multi-turn):
+    python -m evals.swe_bench.run_patch_generation \
+        --strategy agent \
+        --vllm-url http://vllm-server:8000/v1 \
+        --model-name Qwen/Qwen3-1.7B \
+        --agent-config evals/swe_bench/agents/mini_swe_agent.yaml \
+        --max-turns 3 \
+        --intermediate-verifiers ast_check \
         --output-dir /tmp/swe-bench-results/
 """
 
@@ -96,6 +118,7 @@ def save_prediction(output_dir: Path, result: dict) -> None:
     Each instance gets a directory with:
       - prediction.json             (the prediction)
       - report.json                 (eval grading result)
+      - multi_turn.json             (per-turn patches, feedback, and scores; multi-turn only)
       - pod_logs.txt                (full pod stdout, agent strategy only)
       - <instance_id>.traj.json     (agent trajectory, if available)
     """
@@ -118,6 +141,12 @@ def save_prediction(output_dir: Path, result: dict) -> None:
     (instance_dir / "report.json").write_text(
         json.dumps(report_data, indent=2)
     )
+
+    # multi_turn.json (multi-turn runs only)
+    if result.get("multi_turn"):
+        (instance_dir / "multi_turn.json").write_text(
+            json.dumps(result["multi_turn"], indent=2)
+        )
 
     # pod_logs.txt (agent strategy only)
     if result.get("full_logs"):
@@ -165,18 +194,76 @@ def _write_merged_predictions(output_dir: Path, dataset: list) -> Path:
 
 
 def _upload_to_s3(local_path: Path, s3_uri: str | None) -> None:
-    """Upload predictions file to S3 if an S3 URI was provided."""
+    """Upload the predictions file and all per-instance directories to S3.
+
+    The predictions.jsonl goes to s3_uri directly. Per-instance directories
+    are uploaded alongside it under the same S3 prefix.
+    """
     if not s3_uri:
         logger.info("No --s3-output specified, skipping S3 upload")
         return
+
+    from evals.common.s3_storage import upload_dir
+
     upload_file(local_path, s3_uri)
 
+    # Upload per-instance dirs to the same prefix as the predictions file
+    s3_prefix = s3_uri.rsplit("/", 1)[0]
+    output_dir = local_path.parent
+    upload_dir(output_dir, s3_prefix)
 
-# ── Strategy: naive (single-shot vLLM) ──────────────────────────────
+
+# ── Verifier set builder (shared across strategies) ─────────────────
+
+def _build_verifier_set(args):
+    """Build the VerifierSet and aggregator from CLI args."""
+    from evals.common.score_aggregator import build_aggregator
+    from evals.common.verifier_set import VerifierSet
+    from evals.swe_bench.verifiers.unit_test_verifier import SWEBenchUnitTestVerifier
+    from verifiers.ast_check import ASTCheckVerifier
+
+    vset = VerifierSet()
+    intermediate_names = set(args.intermediate_verifiers or [])
+    final_names = set(args.final_verifiers or [])
+
+    # If --final-verifiers is not provided, default to swe_test only
+    if not final_names:
+        final_names = {"swe_test"}
+
+    run_ast_intermediate = "ast_check" in intermediate_names
+    run_ast_final = "ast_check" in final_names
+    if run_ast_intermediate or run_ast_final:
+        vset.add(ASTCheckVerifier(),
+                 run_intermediate=run_ast_intermediate,
+                 run_final=run_ast_final)
+
+    run_swe_intermediate = "swe_test" in intermediate_names
+    run_swe_final = "swe_test" in final_names
+    if run_swe_intermediate or run_swe_final:
+        vset.add(
+            SWEBenchUnitTestVerifier(
+                swebench_namespace=args.swebench_namespace,
+                image_registry=args.image_registry or None,
+                timeout=float(args.job_timeout or 1800),
+            ),
+            run_intermediate=run_swe_intermediate,
+            run_final=run_swe_final,
+        )
+
+    aggregator = build_aggregator(args.aggregator)
+    return vset, aggregator
+
+
+# ── Strategy: naive (vLLM inference, single or multi-turn) ──────────
 
 def _run_naive(args, pending: list, output_dir: Path) -> list[dict]:
-    """Run naive single-shot inference via PatchWorker Ray actors."""
-    from evals.swe_bench.patch_worker import PatchWorker
+    """Run naive vLLM inference via SWEBenchMultiTurnWorker Ray actors.
+
+    With max_turns=1 this is equivalent to single-shot generation followed by
+    K8s test execution. With max_turns>1 the model receives intermediate
+    verifier feedback and can revise its patch.
+    """
+    from evals.swe_bench.multi_turn_worker import SWEBenchMultiTurnWorker
     from evals.swe_bench.prompt import load_prompt_dataset
 
     prompts_path = _resolve_prompts(args.prompts, output_dir)
@@ -191,13 +278,24 @@ def _run_naive(args, pending: list, output_dir: Path) -> list[dict]:
             f"First missing: {missing[:5]}"
         )
 
+    vset, aggregator = _build_verifier_set(args)
     num_workers = min(args.num_workers, len(pending))
     workers = [
-        PatchWorker.remote(
+        SWEBenchMultiTurnWorker.remote(
             vllm_urls=args.vllm_url,
             model_name=args.model_name,
+            strategy="naive",
             max_tokens=args.max_tokens,
             temperature=args.temperature,
+            verifier_set=vset,
+            aggregator=aggregator,
+            max_turns=args.max_turns,
+            k8s_namespace=args.k8s_namespace,
+            timeout=int(args.job_timeout or 1800),
+            service_account=args.service_account,
+            max_concurrent_jobs=args.max_concurrent_jobs,
+            swebench_namespace=args.swebench_namespace,
+            image_registry=args.image_registry or None,
         )
         for _ in range(num_workers)
     ]
@@ -207,9 +305,12 @@ def _run_naive(args, pending: list, output_dir: Path) -> list[dict]:
         batches[i % num_workers].append(dict(instance))
 
     prompts_ref = ray.put(prompts)
-    logger.info(f"Distributing {len(pending)} instances across {num_workers} workers")
+    logger.info(
+        f"Distributing {len(pending)} instances across {num_workers} workers "
+        f"(max_turns={args.max_turns})"
+    )
     futures = [
-        worker.generate_patches.remote(batch, prompts_ref)
+        worker.evaluate_batch.remote(batch, prompts_ref, args.run_id)
         for worker, batch in zip(workers, batches)
         if batch
     ]
@@ -217,53 +318,105 @@ def _run_naive(args, pending: list, output_dir: Path) -> list[dict]:
     return _collect_results(futures)
 
 
-# ── Strategy: agent (agentic loop via K8s Jobs) ─────────────────────
+# ── Strategy: agent (agentic loop via K8s Jobs, single or multi-turn)
 
 def _run_agent(args, pending: list, output_dir: Path) -> list[dict]:
-    """Run agent-based patch generation via AgentWorker Ray actors."""
+    """Run agent-based patch generation via AgentWorker or SWEBenchMultiTurnWorker.
+
+    With max_turns=1, uses AgentWorker which is self-contained (generation +
+    evaluation happen inside the K8s Job). With max_turns>1, uses
+    SWEBenchMultiTurnWorker with strategy="agent" so intermediate verifier feedback
+    can be injected between attempts.
+    """
     from evals.swe_bench.agent_config import load_agent_config
-    from evals.swe_bench.agent_worker import AgentWorker
 
     agent_config = load_agent_config(args.agent_config)
+    if args.job_timeout > 0:
+        agent_config.job_timeout = args.job_timeout
     logger.info(f"Agent: {agent_config.name}")
 
     subset = _resolve_subset_name(args.dataset)
-
     num_workers = min(args.num_workers, len(pending))
-    workers = [
-        AgentWorker.remote(
-            agent_config_dict=asdict(agent_config),
-            model_name=args.model_name,
-            model_base_url=args.vllm_url[0],
-            model_api_key=args.model_api_key,
-            k8s_namespace=args.k8s_namespace,
-            service_account=args.service_account,
-            image_registry=args.image_registry,
-            swebench_namespace=args.swebench_namespace,
-            subset=subset,
-            split=args.split,
-            step_limit=args.step_limit,
-            cost_limit=args.cost_limit,
-            max_concurrent_jobs=args.max_concurrent_jobs,
-            job_timeout=args.job_timeout,
-            run_eval=args.run_eval,
-        )
-        for _ in range(num_workers)
-    ]
 
     batches = [[] for _ in range(num_workers)]
     for i, instance in enumerate(pending):
         batches[i % num_workers].append(dict(instance))
 
-    logger.info(
-        f"Distributing {len(pending)} instances across {num_workers} workers "
-        f"(max {args.max_concurrent_jobs} concurrent Jobs per worker)"
-    )
-    futures = [
-        worker.generate_patches.remote(batch, args.run_id)
-        for worker, batch in zip(workers, batches)
-        if batch
-    ]
+    if args.max_turns > 1:
+        from evals.swe_bench.multi_turn_worker import SWEBenchMultiTurnWorker
+
+        vset, aggregator = _build_verifier_set(args)
+
+        workers = [
+            SWEBenchMultiTurnWorker.remote(
+                vllm_urls=args.vllm_url,
+                model_name=args.model_name,
+                strategy="agent",
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                verifier_set=vset,
+                aggregator=aggregator,
+                max_turns=args.max_turns,
+                k8s_namespace=args.k8s_namespace,
+                timeout=int(args.job_timeout or 1800),
+                service_account=args.service_account,
+                max_concurrent_jobs=args.max_concurrent_jobs,
+                swebench_namespace=args.swebench_namespace,
+                image_registry=args.image_registry or None,
+                agent_config_dict=asdict(agent_config),
+                model_api_key=args.model_api_key,
+                subset=subset,
+                split=args.split,
+                step_limit=args.step_limit,
+                cost_limit=args.cost_limit,
+            )
+            for _ in range(num_workers)
+        ]
+
+        prompts_ref = ray.put({})  # agent strategy does not use pre-built prompts
+        logger.info(
+            f"Distributing {len(pending)} instances across {num_workers} workers "
+            f"(agent, max_turns={args.max_turns}, "
+            f"max {args.max_concurrent_jobs} concurrent Jobs per worker)"
+        )
+        futures = [
+            worker.evaluate_batch.remote(batch, prompts_ref, args.run_id)
+            for worker, batch in zip(workers, batches)
+            if batch
+        ]
+    else:
+        from evals.swe_bench.agent_worker import AgentWorker
+
+        workers = [
+            AgentWorker.remote(
+                agent_config_dict=asdict(agent_config),
+                model_name=args.model_name,
+                vllm_urls=args.vllm_url,
+                model_api_key=args.model_api_key,
+                k8s_namespace=args.k8s_namespace,
+                service_account=args.service_account,
+                image_registry=args.image_registry,
+                swebench_namespace=args.swebench_namespace,
+                subset=subset,
+                split=args.split,
+                step_limit=args.step_limit,
+                cost_limit=args.cost_limit,
+                max_concurrent_jobs=args.max_concurrent_jobs,
+                job_timeout=args.job_timeout,
+                run_eval=args.run_eval,
+            )
+            for _ in range(num_workers)
+        ]
+
+        logger.info(
+            f"Distributing {len(pending)} instances across {num_workers} workers "
+            f"(agent, max {args.max_concurrent_jobs} concurrent Jobs per worker)"
+        )
+        futures = [
+            worker.generate_patches.remote(batch, args.run_id)
+            for worker, batch in zip(workers, batches)
+            if batch
+        ]
 
     return _collect_results(futures)
 
@@ -320,7 +473,7 @@ def _dry_run(args, dataset: list) -> None:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Phase 1: Generate SWE-bench patches (naive or agent strategy)"
+        description="Generate SWE-bench patches (naive or agent strategy, single or multi-turn)"
     )
 
     # Common args
@@ -346,6 +499,20 @@ def _parse_args() -> argparse.Namespace:
                         help="Max instances to evaluate (0 = no limit)")
     common.add_argument("--run-id", type=str, default="eval-run",
                         help="Unique run identifier")
+    common.add_argument("--max-turns", type=int, default=1,
+                        help="Max generation attempts per instance "
+                             "(1 = single-shot, >1 = multi-turn with feedback)")
+    common.add_argument("--intermediate-verifiers", type=str, nargs="*", default=[],
+                        choices=["ast_check", "swe_test"],
+                        help="Verifiers to run after each intermediate turn. "
+                             "Options: ast_check, swe_test")
+    common.add_argument("--final-verifiers", type=str, nargs="*", default=None,
+                        choices=["ast_check", "swe_test"],
+                        help="Verifiers to run on the final patch. "
+                             "Default: swe_test only")
+    common.add_argument("--aggregator", type=str, default="mean",
+                        choices=["mean", "min", "weighted_sum"],
+                        help="Score aggregation strategy for multi-turn")
 
     # Naive strategy args
     naive = parser.add_argument_group("naive strategy")
@@ -381,9 +548,10 @@ def _parse_args() -> argparse.Namespace:
     agent.add_argument("--job-timeout", type=int, default=0,
                        help="K8s Job timeout in seconds (0 = use agent config default)")
     agent.add_argument("--run-eval", action="store_true", default=True,
-                       help="Run in-container evaluation after agent (default: True)")
+                       help="Run in-container evaluation after agent (default: True, "
+                            "only applies when max_turns=1)")
     agent.add_argument("--skip-eval", action="store_true",
-                       help="Skip in-container evaluation")
+                       help="Skip in-container evaluation (only applies when max_turns=1)")
 
     # Debug
     agent.add_argument("--dry-run", action="store_true",
@@ -456,8 +624,10 @@ def main():
     # Upload to S3
     _upload_to_s3(predictions_path, args.s3_output)
 
-    # Write aggregate results.json (agent strategy with eval)
-    if args.strategy == "agent" and args.run_eval:
+    # Write aggregate results.json when evaluation was performed
+    uses_multi_turn = args.max_turns > 1
+    agent_with_eval = args.strategy == "agent" and args.max_turns == 1 and args.run_eval
+    if uses_multi_turn or agent_with_eval:
         _write_aggregate_results(output_dir, all_results)
 
     # Summary
@@ -469,19 +639,37 @@ def main():
         if (output_dir / inst["instance_id"] / "prediction.json").exists()
     )
 
+    turn_label = f", max_turns={args.max_turns}" if args.max_turns > 1 else ""
     logger.info("=" * 60)
-    logger.info(f"Phase 1 complete ({args.strategy} strategy)")
+    logger.info(f"Evaluation complete ({args.strategy}{turn_label})")
     logger.info("=" * 60)
     logger.info(f"  Patches generated:  {patches_generated}/{total}")
     logger.info(f"  Errors:             {errors}")
 
-    if args.strategy == "agent" and args.run_eval:
-        resolved = sum(1 for r in all_results if r.get("resolved") is True)
-        evaluated = sum(1 for r in all_results if r.get("resolved") is not None)
-        rate = resolved / evaluated if evaluated > 0 else 0
-        logger.info(f"  Evaluated:          {evaluated}")
-        logger.info(f"  Resolved:           {resolved}")
-        logger.info(f"  Resolve rate:       {rate:.1%}")
+    if uses_multi_turn or agent_with_eval:
+        evaluated = [r for r in all_results
+                     if not r.get("error") and r.get("resolved") is not None]
+        resolved = [r for r in evaluated if r.get("resolved") is True]
+        resolve_rate = len(resolved) / len(evaluated) if evaluated else 0
+        completion_rate = len(evaluated) / total if total > 0 else 0
+        logger.info(f"  Evaluated:          {len(evaluated)}/{total}")
+        logger.info(f"  Completion rate:    {completion_rate:.1%}")
+        logger.info(f"  Resolved:           {len(resolved)}")
+        logger.info(f"  Resolve rate:       {resolve_rate:.1%}")
+
+    if uses_multi_turn:
+        turn_counts = [
+            r.get("multi_turn", {}).get("num_turns", 1)
+            for r in all_results if not r.get("error")
+        ]
+        if turn_counts:
+            avg_turns = sum(turn_counts) / len(turn_counts)
+            early_exits = sum(
+                1 for r in all_results
+                if r.get("multi_turn", {}).get("stopped_early", False)
+            )
+            logger.info(f"  Avg turns:          {avg_turns:.2f}")
+            logger.info(f"  Early exits:        {early_exits}/{len(turn_counts)}")
 
     logger.info(f"  Total time:         {elapsed / 60:.1f} minutes")
     logger.info("=" * 60)
@@ -496,15 +684,16 @@ def main():
 
 def _write_aggregate_results(output_dir: Path, all_results: list[dict]) -> None:
     """Write aggregate results.json from eval results."""
-    from evals.swe_bench.grader import AggregateReport
-
-    evaluated = [r for r in all_results if r.get("resolved") is not None]
-    resolved = [r for r in evaluated if r.get("resolved") is True]
     errors = [r for r in all_results if r.get("error")]
+    evaluated = [r for r in all_results
+                 if not r.get("error") and r.get("resolved") is not None]
+    resolved = [r for r in evaluated if r.get("resolved") is True]
 
+    total = len(all_results)
     report = {
-        "total_instances": len(all_results),
+        "total_instances": total,
         "evaluated": len(evaluated),
+        "completion_rate": len(evaluated) / total if total > 0 else 0,
         "resolved_instances": len(resolved),
         "unresolved_instances": len(evaluated) - len(resolved),
         "error_instances": len(errors),
@@ -536,8 +725,8 @@ def _log_to_mlflow(args, total, patches_generated, errors, all_results,
             os.environ["MLFLOW_S3_ENDPOINT_URL"] = s3_endpoint
 
         mlflow.set_experiment("swe-bench-eval")
-        with mlflow.start_run(run_name=f"{args.run_id}-phase1",
-                              tags={"run_id": args.run_id, "phase": "1",
+        with mlflow.start_run(run_name=f"{args.run_id}-{args.strategy}",
+                              tags={"run_id": args.run_id,
                                     "strategy": args.strategy}):
             params = {
                 "strategy": args.strategy,
@@ -547,6 +736,7 @@ def _log_to_mlflow(args, total, patches_generated, errors, all_results,
                 "run_id": args.run_id,
                 "num_workers": args.num_workers,
                 "instance_limit": args.instance_limit,
+                "max_turns": args.max_turns,
             }
             if args.strategy == "naive":
                 params.update({
@@ -559,18 +749,28 @@ def _log_to_mlflow(args, total, patches_generated, errors, all_results,
                     "step_limit": args.step_limit,
                     "cost_limit": args.cost_limit,
                 })
+            if args.max_turns > 1:
+                params.update({
+                    "intermediate_verifiers": ",".join(args.intermediate_verifiers or []),
+                    "aggregator": args.aggregator,
+                })
 
             mlflow.log_params(params)
 
+            uses_multi_turn = args.max_turns > 1
+            agent_with_eval = args.strategy == "agent" and args.max_turns == 1 and args.run_eval
             metrics = {
                 "total_instances": total,
                 "patches_generated": patches_generated,
                 "generation_errors": errors,
             }
-            if args.strategy == "agent" and args.run_eval:
-                resolved = sum(1 for r in all_results if r.get("resolved") is True)
-                evaluated = sum(1 for r in all_results if r.get("resolved") is not None)
+            if uses_multi_turn or agent_with_eval:
+                evaluated = sum(1 for r in all_results
+                                if not r.get("error") and r.get("resolved") is not None)
+                resolved = sum(1 for r in all_results
+                               if not r.get("error") and r.get("resolved") is True)
                 metrics["evaluated"] = evaluated
+                metrics["completion_rate"] = evaluated / total if total else 0
                 metrics["resolved"] = resolved
                 metrics["resolve_rate"] = resolved / evaluated if evaluated else 0
 
