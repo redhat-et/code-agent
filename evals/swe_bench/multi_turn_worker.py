@@ -71,6 +71,7 @@ class SWEBenchMultiTurnWorker(MultiTurnWorkerBase):
         split: str = "test",
         step_limit: int = 100,
         cost_limit: float = 3.0,
+        disable_thinking: bool = False,
     ):
         from evals.swe_bench.agent_config import AgentConfig
         from evals.swe_bench.agent_worker import _detect_namespace, _init_k8s
@@ -84,6 +85,7 @@ class SWEBenchMultiTurnWorker(MultiTurnWorkerBase):
             aggregator=aggregator,
             max_turns=max_turns,
             max_concurrent_jobs=max_concurrent_jobs,
+            disable_thinking=disable_thinking,
         )
 
         self.strategy = strategy
@@ -202,6 +204,7 @@ class SWEBenchMultiTurnWorker(MultiTurnWorkerBase):
                 template_vars=template_vars,
                 eval_script="",
                 run_eval=False,
+                disable_thinking=self.disable_thinking,
             )
             job = _build_job_manifest(
                 instance_id=instance_id,

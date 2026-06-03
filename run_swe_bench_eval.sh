@@ -51,6 +51,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-/tmp/swe-bench-results/${RUN_ID}}"
 S3_BUCKET="${S3_BUCKET:-swe-bench}"
 S3_OUTPUT="${S3_OUTPUT:-s3://${S3_BUCKET}/runs/${RUN_ID}/results.json}"
 MLFLOW_TRACKING_URI="${MLFLOW_TRACKING_URI:-}"
+DISABLE_THINKING="${DISABLE_THINKING:-0}"
 
 # ── Multi-turn config (applies to both strategies) ─────────────
 MAX_TURNS="${MAX_TURNS:-1}"
@@ -129,6 +130,10 @@ elif [[ "${STRATEGY}" == "agent" ]]; then
     if [[ "${RUN_EVAL}" == "0" ]]; then
         CMD_ARGS+=(--skip-eval)
     fi
+fi
+
+if [[ "${DISABLE_THINKING}" == "1" ]]; then
+    CMD_ARGS+=(--disable-thinking)
 fi
 
 # K8s and registry args (needed for agent and multi-turn naive)
