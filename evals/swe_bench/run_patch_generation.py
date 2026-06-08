@@ -287,6 +287,7 @@ def _run_naive(args, pending: list, output_dir: Path) -> list[dict]:
             strategy="naive",
             max_tokens=args.max_tokens,
             temperature=args.temperature,
+            disable_thinking=args.disable_thinking,
             verifier_set=vset,
             aggregator=aggregator,
             max_turns=args.max_turns,
@@ -369,6 +370,7 @@ def _run_agent(args, pending: list, output_dir: Path) -> list[dict]:
                 split=args.split,
                 step_limit=args.step_limit,
                 cost_limit=args.cost_limit,
+                disable_thinking=args.disable_thinking,
             )
             for _ in range(num_workers)
         ]
@@ -404,6 +406,7 @@ def _run_agent(args, pending: list, output_dir: Path) -> list[dict]:
                 max_concurrent_jobs=args.max_concurrent_jobs,
                 job_timeout=args.job_timeout,
                 run_eval=args.run_eval,
+                disable_thinking=args.disable_thinking,
             )
             for _ in range(num_workers)
         ]
@@ -513,6 +516,8 @@ def _parse_args() -> argparse.Namespace:
     common.add_argument("--aggregator", type=str, default="mean",
                         choices=["mean", "min", "weighted_sum"],
                         help="Score aggregation strategy for multi-turn")
+    common.add_argument("--disable-thinking", action="store_true",
+                        help="Disable model thinking/reasoning (e.g. Qwen3 enable_thinking=false)")
 
     # Naive strategy args
     naive = parser.add_argument_group("naive strategy")

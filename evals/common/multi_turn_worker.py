@@ -48,6 +48,7 @@ class MultiTurnWorkerBase:
         aggregator: ScoreAggregator | None = None,
         max_turns: int = 1,
         max_concurrent_jobs: int = 4,
+        disable_thinking: bool = False,
     ):
         import openai
 
@@ -59,6 +60,7 @@ class MultiTurnWorkerBase:
         self.temperature = temperature
         self.max_turns = max_turns
         self.max_concurrent_jobs = max_concurrent_jobs
+        self.disable_thinking = disable_thinking
 
         self.vllm_urls = vllm_urls
         self.clients = [
@@ -88,12 +90,17 @@ class MultiTurnWorkerBase:
     def _generate_naive(self, messages: list[dict]) -> str:
         """Generate a response via inline vLLM inference."""
         client = self._get_client()
-        response = client.chat.completions.create(
+        kwargs: dict = dict(
             model=self.model_name,
             messages=messages,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
         )
+        if self.disable_thinking:
+            kwargs["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
+        response = client.chat.completions.create(**kwargs)
         return response.choices[0].message.content or ""
 
     # ── Verifier execution ──────────────────────────────────────────────────

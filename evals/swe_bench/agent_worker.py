@@ -142,10 +142,14 @@ def _build_job_command(
     template_vars: dict[str, str],
     eval_script: str = "",
     run_eval: bool = True,
+    disable_thinking: bool = False,
 ) -> list[str]:
     """Build the shell command for the K8s Job container."""
     install_cmd = render_template(agent_config.install_command, **template_vars).strip()
     agent_cmd = render_template(agent_config.agent_command, **template_vars).strip()
+
+    if disable_thinking:
+        agent_cmd += ' -c \'model.model_kwargs.extra_body={"chat_template_kwargs": {"enable_thinking": false}}\''
 
     extraction = agent_config.patch_extraction
     if extraction.startswith("preds_json:"):
@@ -532,6 +536,7 @@ class AgentWorker:
         max_concurrent_jobs: int = 4,
         job_timeout: int = 0,
         run_eval: bool = True,
+        disable_thinking: bool = False,
     ):
         self.agent_config = AgentConfig(**agent_config_dict)
         # CLI --job-timeout overrides the agent config default (0 = use config)
@@ -553,6 +558,7 @@ class AgentWorker:
         self.cost_limit = cost_limit
         self.max_concurrent_jobs = max_concurrent_jobs
         self.run_eval = run_eval
+        self.disable_thinking = disable_thinking
 
         self.batch_api, self.core_api = _init_k8s()
 
@@ -594,6 +600,7 @@ class AgentWorker:
                 template_vars=template_vars,
                 eval_script=info.eval_script,
                 run_eval=self.run_eval,
+                disable_thinking=self.disable_thinking,
             )
             job = _build_job_manifest(
                 instance_id=instance_id,
