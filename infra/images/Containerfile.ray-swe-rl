@@ -1,0 +1,26 @@
+# Thin app image for SWE-bench RL training.
+#
+# Layers ONLY the project code on top of the pre-built base image.
+# Rebuilds in < 1 min for code changes.
+#
+# Prerequisites:
+#   The base image must be built first (one-time):
+#     oc start-build ray-swe-rl-base --follow
+#
+# Build (fast, after every code change):
+#   oc start-build ray-swe-rl --from-dir=/tmp/code-agent-build --follow
+
+FROM image-registry.openshift-image-registry.svc:5000/code-agent/ray-swe-rl-base:latest
+
+USER 0
+
+# Fix DeepSpeed 0.19.1 + nvtx 0.2.13 incompatibility on GPU nodes.
+# DummyDomain.push_range() has a different signature than DeepSpeed expects.
+# Disabling domain-based NVTX falls back to torch.cuda.nvtx.range_push() which works.
+RUN sed -i 's/supports_nvtx_domain = True/supports_nvtx_domain = False/' \
+    /usr/local/lib/python3.12/dist-packages/deepspeed/accelerator/cuda_accelerator.py
+
+COPY . /opt/code-agent
+RUN pip install --no-cache-dir -e /opt/code-agent
+
+USER 1001

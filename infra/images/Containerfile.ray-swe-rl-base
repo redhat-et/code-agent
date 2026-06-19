@@ -1,0 +1,37 @@
+# Base image for SWE-bench RL training.
+#
+# Uses the NVIDIA PyTorch container as recommended by OpenRLHF docs.
+# flash-attn, torch, CUDA, cuDNN are all pre-built and consistent.
+# No CUDA compilation needed — build takes ~10 min.
+#
+# Build ONCE via OpenShift BuildConfig:
+#   oc apply -f infra/deploy/buildconfig-ray-swe-rl-base.yaml
+#   oc start-build ray-swe-rl-base --follow
+
+FROM nvcr.io/nvidia/pytorch:25.11-py3
+
+USER 0
+
+# 1. Remove conflicting packages from the NVIDIA container.
+#    Keep flash_attn — it's pre-built and compatible with this container's torch.
+RUN pip uninstall -y xgboost transformer_engine pynvml opencv-python-headless 2>/dev/null || true
+
+# 2. OpenRLHF with vLLM (latest).
+#    flash-attn is already satisfied from the base image, so pip won't rebuild it.
+RUN pip install --no-cache-dir "openrlhf[vllm_latest]"
+
+# 3. Eval/training deps
+RUN pip install --no-cache-dir \
+    "kubernetes>=28.0.0" \
+    "swebench @ git+https://github.com/SWE-bench/SWE-bench.git@v4.1.0" \
+    "datasets" \
+    "openai>=1.0.0"
+
+# 4. Bleeding-edge transformers for Qwen3.5 support
+RUN pip install --no-cache-dir \
+    "transformers @ git+https://github.com/huggingface/transformers.git"
+
+USER 1001
+
+ENV HF_HOME=/hf-cache
+ENV XDG_CACHE_HOME=/hf-cache

@@ -60,6 +60,8 @@ class SWEBenchAgentInstance(AgentInstanceBase):
         self.step_count = 0
         self.max_steps = _MAX_STEPS
         self.instance_id = ""
+        self._total_output_chars = 0
+        self._nonzero_exits = 0
 
     async def reset(self, states: dict, **kwargs) -> dict:
         """Create the sandbox Pod and return the system prompt.
@@ -74,6 +76,8 @@ class SWEBenchAgentInstance(AgentInstanceBase):
 
         self.instance_id = instance.get("instance_id", "unknown")
         self.step_count = 0
+        self._total_output_chars = 0
+        self._nonzero_exits = 0
 
         await self.env.create(instance)
 
@@ -89,6 +93,14 @@ class SWEBenchAgentInstance(AgentInstanceBase):
           state_dict["label"]            = ground truth label
         """
         action_text = state_dict.get("action_text", "")
+
+        if self.step_count == 0 and "<think>" in action_text:
+            logger.warning(
+                f"[{self.instance_id}] Thinking mode appears to be ON — "
+                f"model output contains <think> tags. "
+                f"Ensure the dataset was built with enable_thinking=False."
+            )
+
         tool_call = parse_tool_call(action_text)
 
         self.step_count += 1
@@ -106,6 +118,10 @@ class SWEBenchAgentInstance(AgentInstanceBase):
             stdout = f"Error executing command: {e}"
             exit_code = 1
 
+        self._total_output_chars += len(stdout)
+        if exit_code != 0:
+            self._nonzero_exits += 1
+
         feedback = _format_tool_output(stdout, exit_code)
 
         return {
@@ -113,14 +129,12 @@ class SWEBenchAgentInstance(AgentInstanceBase):
             "scores": torch.tensor(0.0),
             "environment_feedback": feedback,
             "done": False,
-            "extra_logs": {
-                "step": self.step_count,
-                "exit_code": exit_code,
-            },
         }
 
     async def _handle_submit(self) -> dict:
+        patch = ""
         try:
+            patch = await self.env.get_patch()
             resolved, eval_output = await self.env.run_eval()
         except Exception as e:
             logger.error(f"[{self.instance_id}] Eval failed: {e}")
@@ -129,10 +143,19 @@ class SWEBenchAgentInstance(AgentInstanceBase):
             await self.env.destroy()
 
         reward = 1.0 if resolved else 0.0
+
+        patch_lines = patch.count("\n") if patch else 0
+        files_changed = len(set(
+            line.split(" b/", 1)[1]
+            for line in patch.splitlines()
+            if line.startswith("diff --git ")
+        )) if patch else 0
+
         logger.info(
             f"[{self.instance_id}] Episode done: "
             f"{'RESOLVED' if resolved else 'NOT RESOLVED'} "
-            f"in {self.step_count} steps"
+            f"in {self.step_count} steps, "
+            f"{patch_lines} patch lines, {files_changed} files"
         )
 
         return {
@@ -143,5 +166,11 @@ class SWEBenchAgentInstance(AgentInstanceBase):
             "extra_logs": {
                 "resolved": reward,
                 "steps": self.step_count,
+                "patch_lines": patch_lines,
+                "files_changed": files_changed,
+                "empty_patch": float(not patch),
+                "immediate_submit": float(self.step_count <= 1),
+                "nonzero_exits": self._nonzero_exits,
+                "total_output_chars": self._total_output_chars,
             },
         }

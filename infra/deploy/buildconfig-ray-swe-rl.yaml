@@ -1,0 +1,42 @@
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: ray-swe-rl
+spec:
+  lookupPolicy:
+    local: true
+
+---
+# BuildConfig for the SWE-bench RL training image.
+#
+# Layers project code + eval deps on top of the Ray+OpenRLHF base image.
+#
+# Usage (from-dir with local code):
+#   oc apply -f infra/deploy/buildconfig-ray-swe-rl.yaml
+#   oc start-build ray-swe-rl --from-dir=/tmp/code-agent-build --follow
+#
+# The built image is available as:
+#   image-registry.openshift-image-registry.svc:5000/code-agent/ray-swe-rl:latest
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: ray-swe-rl
+spec:
+  source:
+    type: Binary
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: infra/images/Containerfile.ray-swe-rl
+  output:
+    to:
+      kind: ImageStreamTag
+      name: ray-swe-rl:latest
+  resources:
+    requests:
+      cpu: "8"
+      memory: "16Gi"
+    limits:
+      cpu: "16"
+      memory: "32Gi"

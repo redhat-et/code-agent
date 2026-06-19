@@ -34,7 +34,7 @@ spec:
           env:
             # ── Model parameters (edit these) ──────────────────
             - name: MODEL
-              value: "<HUGGINGFACE MODEL NAME>"
+              value: "Qwen/Qwen3.5-9B"
             # Point all caches at the writable PVC mount
             - name: HF_HOME
               value: "/cache/huggingface"
@@ -42,6 +42,8 @@ spec:
               value: "/cache"
             - name: HOME
               value: "/cache"
+            - name: USER
+              value: "vllm"
             # HuggingFace token only needed for gated models.
             # Uncomment for gated model
             # - name: HF_TOKEN
@@ -58,7 +60,8 @@ spec:
             - "--port=8000"
             - "--gpu-memory-utilization=0.95" 
             - "--enable-auto-tool-choice"
-            - "--tool-call-parser=<SET TO MODEL SPECIFIC TOOL PARSER>"
+            - "--tool-call-parser=qwen3_coder"
+            - "--reasoning-parser=qwen3"
           ports:
             - name: http
               containerPort: 8000
@@ -74,18 +77,18 @@ spec:
             httpGet:
               path: /health
               port: http
-            initialDelaySeconds: 120
+            initialDelaySeconds: 300
             periodSeconds: 30
             timeoutSeconds: 5
           resources:
             requests:
               cpu: "4"
-              memory: "32Gi"
-              nvidia.com/gpu: "1"
+              memory: "64Gi"
+              nvidia.com/gpu: "2"
             limits:
               cpu: "4"
-              memory: "32Gi"
-              nvidia.com/gpu: "1"
+              memory: "64Gi"
+              nvidia.com/gpu: "2"
           volumeMounts:
             - name: cache
               mountPath: /cache
@@ -101,29 +104,3 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: "8Gi"
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: vllm-server
-  labels:
-    app: vllm
-spec:
-  selector:
-    app: vllm
-  ports:
-    - name: http
-      port: 8000
-      targetPort: http
-      protocol: TCP
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: vllm-cache
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 50Gi

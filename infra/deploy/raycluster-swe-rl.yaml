@@ -1,0 +1,33 @@
+# This file is auto-generated. Do not edit manually.
+#
+# To regenerate from the current hardware configuration:
+#   bash train_swe_bench_grpo.sh --generate-cluster > infra/deploy/raycluster-swe-rl.yaml
+#
+# To apply directly:
+#   bash train_swe_bench_grpo.sh --generate-cluster | oc apply -f -
+#
+# Edit the hardware configuration at the top of train_swe_bench_grpo.sh
+# to switch between colocated/separate modes, GPU counts, and ZeRO stages.
+# See HARDWARE_REQUIREMENTS.md for sizing guidance.
+#
+# Examples:
+#   # 4x A100 80GB, single node, colocated (default)
+#   bash train_swe_bench_grpo.sh --generate-cluster | oc apply -f -
+#
+#   # 6x A100 80GB, single node, separate workers
+#   DEPLOY_MODE=separate TRAINING_GPUS=4 ROLLOUT_GPUS=2 \
+#     bash train_swe_bench_grpo.sh --generate-cluster | oc apply -f -
+#
+#   # 8x A100 80GB, single node, ZeRO-2 for faster training
+#   DEPLOY_MODE=separate TRAINING_GPUS=6 ROLLOUT_GPUS=2 ZERO_STAGE=2 \
+#     bash train_swe_bench_grpo.sh --generate-cluster | oc apply -f -
+#
+#   # 2x g6e.12xlarge (8x L40S across 2 nodes), colocated, ZeRO-3
+#   TRAINING_GPUS=8 TRAINING_GPUS_PER_NODE=4 \
+#     NODE_SELECTOR="node.kubernetes.io/instance-type=g6e.12xlarge" \
+#     bash train_swe_bench_grpo.sh --generate-cluster | oc apply -f -
+#
+#   # 2x g6e.12xlarge, non-colocated (4 train + 4 rollout, one node each)
+#   DEPLOY_MODE=separate TRAINING_GPUS=4 ROLLOUT_GPUS=4 VLLM_TP=4 \
+#     NODE_SELECTOR="node.kubernetes.io/instance-type=g6e.12xlarge" \
+#     bash train_swe_bench_grpo.sh --generate-cluster | oc apply -f -
