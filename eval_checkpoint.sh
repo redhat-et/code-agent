@@ -49,6 +49,15 @@ VLLM_DEPLOYMENT="${VLLM_DEPLOYMENT:-vllm-ckpt-eval}"
 VLLM_PORT="${VLLM_PORT:-8800}"
 CLEANUP="${CLEANUP:-1}"
 
+PF_PID=""
+cleanup() {
+    [ -n "${PF_PID}" ] && kill "${PF_PID}" 2>/dev/null || true
+    if [[ "${CLEANUP}" == "1" ]]; then
+        kubectl delete deployment/${VLLM_DEPLOYMENT} svc/${VLLM_DEPLOYMENT} --ignore-not-found 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+
 # Derive a run ID from the checkpoint path
 CKPT_BASENAME=$(basename "${CHECKPOINT}")
 RUN_ID="${RUN_ID:-eval-${CKPT_BASENAME}-$(date +%s)}"
@@ -100,6 +109,9 @@ spec:
             - "--port=8000"
             - "--gpu-memory-utilization=${VLLM_GPU_MEM}"
             - "--max-model-len=16384"
+            - "--enable-auto-tool-choice"
+            - "--tool-call-parser=qwen3_coder"
+            - "--reasoning-parser=qwen3"
           ports:
             - name: http
               containerPort: 8000
@@ -162,7 +174,6 @@ for i in $(seq 1 30); do
     fi
     if [ "$i" -eq 30 ]; then
         echo "ERROR: vLLM not ready after 5 minutes"
-        kill $PF_PID 2>/dev/null
         exit 1
     fi
     sleep 10
@@ -180,14 +191,8 @@ INSTANCE_LIMIT="${INSTANCE_LIMIT}" \
 
 EVAL_EXIT=$?
 
-# ── Step 4: Clean up ──────────────────────────────────────────
-
-kill $PF_PID 2>/dev/null || true
-
-if [[ "${CLEANUP}" == "1" ]]; then
-    echo ">>> Cleaning up vLLM deployment..."
-    kubectl delete deployment/${VLLM_DEPLOYMENT} svc/${VLLM_DEPLOYMENT} --ignore-not-found
-fi
+# ── Step 4: Report ────────────────────────────────────────────
+# (Cleanup runs automatically via the EXIT trap.)
 
 if [[ $EVAL_EXIT -eq 0 ]]; then
     echo ""

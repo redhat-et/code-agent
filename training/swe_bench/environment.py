@@ -175,7 +175,11 @@ class SWEBenchEnvironment:
             ),
         )
         logger.info(f"[{self._instance_id}] Created Pod {name}")
-        await self._wait_ready()
+        try:
+            await self._wait_ready()
+        except BaseException:
+            await self.destroy()
+            raise
 
     async def _wait_ready(self) -> None:
         loop = asyncio.get_event_loop()

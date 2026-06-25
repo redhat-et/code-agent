@@ -79,6 +79,7 @@ SWE_MAX_STEPS="${SWE_MAX_STEPS:-100}"
 SWE_IMAGE_REGISTRY="${SWE_IMAGE_REGISTRY:-}"
 SWE_K8S_NAMESPACE="${SWE_K8S_NAMESPACE:-}"
 SWE_SERVICE_ACCOUNT="${SWE_SERVICE_ACCOUNT:-swe-bench-training}"
+SWE_MAX_ROLLOUT_RETRIES="${SWE_MAX_ROLLOUT_RETRIES:-2}"
 
 # ═══════════════════════════════════════════════════════════════
 # DERIVED SETTINGS — no need to edit below this line
@@ -302,11 +303,17 @@ ${ns_yaml}
                   mountPath: /tmp
                 - name: hf-cache
                   mountPath: /hf-cache
+                - name: shm
+                  mountPath: /dev/shm
           volumes:
             - name: ray-tmp
               emptyDir: {}
             - name: hf-cache
               emptyDir: {}
+            - name: shm
+              emptyDir:
+                medium: Memory
+                sizeLimit: "${SHM_SIZE}"
     # Training worker: DeepSpeed ZeRO-${ZERO_STAGE} (${TRAINING_GPUS_PER_NODE} GPUs/node × ${TRAINING_NODES} node(s))
     - groupName: training
       replicas: ${TRAINING_NODES}
@@ -378,7 +385,8 @@ ray job submit \
             \"SWE_MAX_STEPS\": \"${SWE_MAX_STEPS}\",
             \"SWE_IMAGE_REGISTRY\": \"${SWE_IMAGE_REGISTRY}\",
             \"SWE_K8S_NAMESPACE\": \"${SWE_K8S_NAMESPACE}\",
-            \"SWE_SERVICE_ACCOUNT\": \"${SWE_SERVICE_ACCOUNT}\"
+            \"SWE_SERVICE_ACCOUNT\": \"${SWE_SERVICE_ACCOUNT}\",
+            \"SWE_MAX_ROLLOUT_RETRIES\": \"${SWE_MAX_ROLLOUT_RETRIES}\"
         }
     }" \
     -- python3 -m openrlhf.cli.train_ppo_ray \

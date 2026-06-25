@@ -36,10 +36,8 @@ def convert(input_dir: Path, output_dir: Path) -> None:
     if not weight_files:
         raise FileNotFoundError(f"No weight files found in {input_dir}")
 
-    is_safetensors = weight_files[0].suffix == ".safetensors"
-
     for wf in weight_files:
-        if is_safetensors:
+        if wf.suffix == ".safetensors":
             from safetensors.torch import load_file, save_file
             state_dict = load_file(wf)
             renamed = {}

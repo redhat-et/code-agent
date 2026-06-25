@@ -28,16 +28,23 @@ class ToolCall:
 def parse_tool_call(text: str) -> ToolCall:
     """Extract the first tool call from model-generated text.
 
-    Returns a ToolCall with type="submit" if a <submit/> tag is found,
-    type="bash" with the command content if a <bash>...</bash> block is
-    found, or type="bash" with the full text as a fallback.
+    When both ``<bash>`` and ``<submit/>`` are present, whichever
+    appears first wins.  Falls back to treating the full text as a
+    bash command if no tags are found.
     """
-    if _SUBMIT_PATTERN.search(text):
+    bash_match = _BASH_PATTERN.search(text)
+    submit_match = _SUBMIT_PATTERN.search(text)
+
+    if bash_match and submit_match:
+        if bash_match.start() < submit_match.start():
+            return ToolCall(type="bash", content=bash_match.group(1).strip())
         return ToolCall(type="submit")
 
-    match = _BASH_PATTERN.search(text)
-    if match:
-        return ToolCall(type="bash", content=match.group(1).strip())
+    if submit_match:
+        return ToolCall(type="submit")
+
+    if bash_match:
+        return ToolCall(type="bash", content=bash_match.group(1).strip())
 
     stripped = text.strip()
     if stripped:

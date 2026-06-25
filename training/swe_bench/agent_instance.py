@@ -26,6 +26,10 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+class InfrastructureError(RuntimeError):
+    """Raised when a rollout fails due to infrastructure, not model quality."""
+
+
 _MAX_STEPS = int(os.environ.get("SWE_MAX_STEPS", "100"))
 _MAX_OUTPUT_CHARS = int(os.environ.get("SWE_MAX_OUTPUT_CHARS", "8000"))
 _IMAGE_REGISTRY = os.environ.get("SWE_IMAGE_REGISTRY", "")
@@ -138,7 +142,9 @@ class SWEBenchAgentInstance(AgentInstanceBase):
             resolved, eval_output = await self.env.run_eval()
         except Exception as e:
             logger.error(f"[{self.instance_id}] Eval failed: {e}")
-            resolved = False
+            raise InfrastructureError(
+                f"[{self.instance_id}] Rollout discarded due to infrastructure failure: {e}"
+            ) from e
         finally:
             await self.env.destroy()
 

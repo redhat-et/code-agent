@@ -18,6 +18,8 @@ USER 0
 # DummyDomain.push_range() has a different signature than DeepSpeed expects.
 # Disabling domain-based NVTX falls back to torch.cuda.nvtx.range_push() which works.
 RUN sed -i 's/supports_nvtx_domain = True/supports_nvtx_domain = False/' \
+    /usr/local/lib/python3.12/dist-packages/deepspeed/accelerator/cuda_accelerator.py && \
+    grep -q 'supports_nvtx_domain = False' \
     /usr/local/lib/python3.12/dist-packages/deepspeed/accelerator/cuda_accelerator.py
 
 COPY . /opt/code-agent

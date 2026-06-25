@@ -26,11 +26,13 @@ metadata:
   name: ray-swe-bench
   namespace: code-agent
 spec:
+  nodeSelector:
+    kubernetes.io/hostname: wrk-2
   source:
     type: Git
     git:
-      uri: https://github.com/redhat-et/code-agent.git
-      ref: main
+      uri: https://github.com/ilya-kolchinsky/code-agent.git
+      ref: rl-loop
   strategy:
     type: Docker
     dockerStrategy:
