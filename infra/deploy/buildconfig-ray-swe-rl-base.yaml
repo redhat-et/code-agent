@@ -1,0 +1,75 @@
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: ray-swe-rl-base
+spec:
+  lookupPolicy:
+    local: true
+
+---
+# BuildConfig for the base image.
+#
+# Uses NVIDIA PyTorch container (torch 2.10 + CUDA 13.0) with a
+# pre-built flash-attn 2.8.3 wheel from the official release.
+# No CUDA compilation needed.
+#
+# Usage:
+#   oc apply -f infra/deploy/buildconfig-ray-swe-rl-base.yaml
+#   oc start-build ray-swe-rl-base --follow
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: ray-swe-rl-base
+spec:
+  source:
+    type: Dockerfile
+    dockerfile: |
+      FROM nvcr.io/nvidia/pytorch:25.11-py3
+
+      USER 0
+
+      ENV FLASH_ATTN_WHL="flash_attn-2.8.3+cu13torch2.10cxx11abiTRUE-cp312-cp312-linux_x86_64.whl"
+      ENV FLASH_ATTN_URL="https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3"
+
+      # 1. Remove conflicting packages from the NVIDIA container
+      RUN pip uninstall -y xgboost transformer_engine flash_attn pynvml opencv-python-headless 2>/dev/null || true
+
+      # 2. Install the exact flash-attn 2.8.3 wheel matching this container
+      #    (torch 2.10 + CUDA 13.0 + cxx11abi + Python 3.12 + Linux x86_64)
+      RUN curl -L -o /tmp/${FLASH_ATTN_WHL} "${FLASH_ATTN_URL}/${FLASH_ATTN_WHL}" && \
+          pip install --no-cache-dir /tmp/${FLASH_ATTN_WHL} && \
+          rm /tmp/${FLASH_ATTN_WHL}
+
+      # 3. OpenRLHF with vLLM (latest). flash-attn==2.8.3 already satisfied.
+      RUN pip install --no-cache-dir "openrlhf[vllm_latest]"
+
+      # 4. Eval/training deps
+      RUN pip install --no-cache-dir \
+          "kubernetes>=28.0.0" \
+          "swebench @ git+https://github.com/SWE-bench/SWE-bench.git@v4.1.0" \
+          "datasets" \
+          "openai>=1.0.0"
+
+      # 5. Bleeding-edge transformers for Qwen3.5 support
+      RUN pip install --no-cache-dir \
+          "transformers @ git+https://github.com/huggingface/transformers.git"
+
+      USER 1001
+
+      ENV HF_HOME=/hf-cache
+      ENV XDG_CACHE_HOME=/hf-cache
+  strategy:
+    type: Docker
+    dockerStrategy: {}
+  output:
+    to:
+      kind: ImageStreamTag
+      name: ray-swe-rl-base:latest
+  resources:
+    requests:
+      cpu: "4"
+      memory: "8Gi"
+    limits:
+      cpu: "8"
+      memory: "16Gi"
