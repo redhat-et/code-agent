@@ -10,7 +10,7 @@
 # Build (fast, after every code change):
 #   oc start-build ray-swe-rl --from-dir=/tmp/code-agent-build --follow
 
-FROM image-registry.openshift-image-registry.svc:5000/code-agent/ray-swe-rl-base:latest
+FROM ray-swe-rl-base:latest
 
 USER 0
 

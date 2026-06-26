@@ -61,6 +61,10 @@ SHM_SIZE="${SHM_SIZE:-16Gi}"
 # Container image for Ray workers.
 RAY_IMAGE="${RAY_IMAGE:-image-registry.openshift-image-registry.svc:5000/code-agent/ray-swe-rl:latest}"
 
+# Image pull policy.  "Always" for registries (OpenShift, local registry on Brev).
+# Set to "IfNotPresent" or "Never" for locally-imported containerd images.
+IMAGE_PULL_POLICY="${IMAGE_PULL_POLICY:-Always}"
+
 # Node selector (optional).  Set to target specific instance types.
 # Example: NODE_SELECTOR="node.kubernetes.io/instance-type=g6e.12xlarge"
 NODE_SELECTOR="${NODE_SELECTOR:-}"
@@ -156,7 +160,7 @@ spec:
         containers:
           - name: ray-head
             image: ${RAY_IMAGE}
-            imagePullPolicy: Always
+            imagePullPolicy: ${IMAGE_PULL_POLICY}
             ports:
               - containerPort: 6379
                 name: gcs
@@ -172,6 +176,14 @@ spec:
                 cpu: "4"
                 memory: "8Gi"
             env:
+              - name: HOME
+                value: /tmp
+              - name: USER
+                value: ray
+              - name: XDG_CACHE_HOME
+                value: /tmp/.cache
+              - name: TRITON_CACHE_DIR
+                value: /tmp/.triton
               - name: NVIDIA_VISIBLE_DEVICES
                 value: "void"
             volumeMounts:
@@ -214,7 +226,10 @@ ${ns_yaml}
           containers:
             - name: ray-worker
               image: ${RAY_IMAGE}
-              imagePullPolicy: Always
+              imagePullPolicy: ${IMAGE_PULL_POLICY}
+              securityContext:
+                capabilities:
+                  add: ["SYS_PTRACE"]
               env:
                 - name: HOME
                   value: /tmp
@@ -275,7 +290,10 @@ ${ns_yaml}
           containers:
             - name: ray-worker
               image: ${RAY_IMAGE}
-              imagePullPolicy: Always
+              imagePullPolicy: ${IMAGE_PULL_POLICY}
+              securityContext:
+                capabilities:
+                  add: ["SYS_PTRACE"]
               env:
                 - name: HOME
                   value: /tmp
@@ -327,7 +345,10 @@ ${ns_yaml}
           containers:
             - name: ray-worker
               image: ${RAY_IMAGE}
-              imagePullPolicy: Always
+              imagePullPolicy: ${IMAGE_PULL_POLICY}
+              securityContext:
+                capabilities:
+                  add: ["SYS_PTRACE"]
               env:
                 - name: HOME
                   value: /tmp
