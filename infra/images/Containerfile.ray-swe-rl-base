@@ -16,20 +16,35 @@ USER 0
 #    Keep flash_attn — it's pre-built and compatible with this container's torch.
 RUN pip uninstall -y xgboost transformer_engine pynvml opencv-python-headless 2>/dev/null || true
 
-# 2. OpenRLHF with vLLM (latest).
-#    flash-attn is already satisfied from the base image, so pip won't rebuild it.
+# 2. Install flash-attn 2.8.3 from a prebuilt wheel (required by openrlhf 0.10.x).
+#    The base image ships 2.7.4.post1; building 2.8.3 from source takes 30+ min
+#    and fails under PEP 517 isolation.  This community wheel was built for
+#    CUDA 12 + torch 2.10 + cp312 + CXX11 ABI, matching our base image.
+RUN pip install --no-cache-dir \
+    "https://github.com/lesj0610/flash-attention/releases/download/v2.8.3-cu12-torch2.10-cp312/flash_attn-2.8.3%2Bcu12torch2.10cxx11abiTRUE-cp312-cp312-linux_x86_64.whl"
+
+# 3. OpenRLHF with vLLM (latest).  flash-attn is now satisfied.
 RUN pip install --no-cache-dir "openrlhf[vllm_latest]"
 
-# 3. Eval/training deps
+# 4. Eval/training deps
 RUN pip install --no-cache-dir \
     "kubernetes>=28.0.0" \
     "swebench @ git+https://github.com/SWE-bench/SWE-bench.git@v4.1.0" \
     "datasets" \
     "openai>=1.0.0"
 
-# 4. Bleeding-edge transformers for Qwen3.5 support
+# 5. Bleeding-edge transformers for Qwen3.5 support
 RUN pip install --no-cache-dir \
     "transformers @ git+https://github.com/huggingface/transformers.git"
+
+# 6. flash-attn 2.8.3 links against libcudart.so.12, but openrlhf[vllm_latest]
+#    pulls vllm with CUDA 13 (libcudart.so.13 only).  Install the CUDA 12
+#    runtime alongside — pip places it where torch's LD_LIBRARY_PATH finds it.
+RUN pip install --no-cache-dir nvidia-cuda-runtime-cu12
+
+# 7. Add passwd entry for UID 1001 so getpass.getuser() works
+#    (PyTorch's cache_dir_utils calls it at import time).
+RUN echo "ray:x:1001:0:ray:/tmp:/bin/bash" >> /etc/passwd
 
 USER 1001
 
